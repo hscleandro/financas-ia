@@ -336,11 +336,12 @@ def find_expense_candidates(
 def delete_expense(expense_id: int, confirmed: bool) -> dict:
     """Exclui um único registro de gasto (soft delete — dado preservado no banco).
 
-    ATENÇÃO: confirmed=True somente após confirmação explícita do usuário nessa mensagem.
+    Use após identificar o registro com find_expense_candidates.
+    O sistema de confirmação HITL gerencia o parâmetro confirmed automaticamente.
 
     Args:
         expense_id: ID único do registro a ser excluído
-        confirmed: True apenas se o usuário confirmou explicitamente agora
+        confirmed: gerenciado pelo sistema — não altere manualmente
     """
     if not confirmed:
         return {
@@ -389,11 +390,12 @@ def update_expense(
 ) -> dict:
     """Atualiza campos de um único registro de gasto.
 
-    ATENÇÃO: confirmed=True somente após confirmação explícita do usuário nessa mensagem.
+    Use após identificar o registro com find_expense_candidates.
+    O sistema de confirmação HITL gerencia o parâmetro confirmed automaticamente.
 
     Args:
         expense_id: ID único do registro a ser atualizado
-        confirmed: True apenas se o usuário confirmou explicitamente agora
+        confirmed: gerenciado pelo sistema — não altere manualmente
         amount: Novo valor em reais (opcional)
         description: Nova descrição (opcional)
         category: Nova categoria (opcional)

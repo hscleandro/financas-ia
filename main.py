@@ -13,6 +13,7 @@ from alembic.config import Config
 from langchain_core.messages import HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.types import Command
 
 from agent.graph import build_graph
 from config import settings
@@ -35,6 +36,28 @@ def run_migrations() -> None:
     """Aplica todas as migrations pendentes. Autoridade final sobre o schema."""
     cfg = Config("alembic.ini")
     command.upgrade(cfg, "head")
+
+
+async def _invoke(graph, input_, config: dict) -> dict:
+    """Invoca o grafo e trata interrupt() de confirmação em loop."""
+    result = await graph.ainvoke(input_, config=config)
+
+    while "__interrupt__" in result:
+        interrupts = result["__interrupt__"]
+        interrupt_msg = interrupts[0].value
+        print(f"\nAssistente: {interrupt_msg}\n")
+
+        try:
+            confirm_input = input("Você: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            raise
+
+        if not confirm_input or confirm_input.lower() in ("sair", "exit", "quit"):
+            raise SystemExit
+
+        result = await graph.ainvoke(Command(resume=confirm_input), config=config)
+
+    return result
 
 
 async def run_chat() -> None:
@@ -75,12 +98,16 @@ async def run_chat() -> None:
                 break
 
             try:
-                result = await graph.ainvoke(
+                result = await _invoke(
+                    graph,
                     {"messages": [HumanMessage(content=user_input)]},
                     config=config,
                 )
                 last = result["messages"][-1]
                 print(f"\nAssistente: {last.content}\n")
+            except SystemExit:
+                print("Até logo!")
+                break
             except Exception as e:
                 print(f"\nErro: {e}\n")
 
