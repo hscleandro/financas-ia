@@ -1,0 +1,206 @@
+@startuml Atividades_Excluir_Gasto
+title MVP 2 — Diagrama de Atividades: Excluir Gasto\nCaso de uso completo — do pedido às 5 camadas de guardrails até o banco
+
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+skinparam activityBackgroundColor #EEF2FF
+skinparam activityBorderColor #6366F1
+skinparam activityDiamondBackgroundColor #FEF9C3
+skinparam activityDiamondBorderColor #D97706
+skinparam arrowColor #6366F1
+skinparam noteBackgroundColor #F5F3FF
+skinparam noteBorderColor #7C3AED
+skinparam swimlaneBorderColor #94A3B8
+skinparam swimlaneBackgroundColor #FAFAFA
+
+|#EEF2FF|Usuário|
+start
+:Digita solicitação de exclusão\n(ex: "apaga o almoço de ontem");
+
+|#F5F3FF|Agente — agent_node|
+:trim_messages → [SystemMessage + histórico]\nainvoke LLM (gpt-4o-mini, temperature=0);
+
+'─────────────────────────────────────────────
+' LAYER 1 — System Prompt
+'─────────────────────────────────────────────
+note right
+  **Layer 1 — System Prompt**
+  Instrução comportamental
+end note
+
+if (Pedido implica exclusão\nem massa?) then (sim\n"apaga todos"\n"delete all"\n"remove os do mês")
+  #FECACA:Recusa imediata — Layer 1\n"Por segurança, exclusões em massa\nnão são permitidas.";
+  |#EEF2FF|Usuário|
+  :Lê mensagem de segurança;
+  stop
+else (não\nexclusão individual)
+endif
+
+:LLM identifica keyword\ne referência temporal (se houver);
+
+if (Usuário mencionou\ndata específica?) then (sim\n"ontem"\n"02/03"\n"dia 5")
+  :Normaliza para ISO\n"ontem" → YYYY-MM-DD\n"02/03" → 2026-03-02;
+else (não\nperíodo vago ou ausente\n"semana passada")
+  :Omite expense_date —\nservidor usará data mais recente;
+endif
+
+:Chama find_expense_candidates\n(keyword, expense_date?);
+
+'─────────────────────────────────────────────
+' MCP Server — Busca
+'─────────────────────────────────────────────
+|#FEF9C3|MCP Server — find_expense_candidates|
+:Busca todos os registros ativos\nWHERE deleted_at IS NULL;
+:Filtra em Python com unicodedata\n(normalize NFD — remove acentos)\nkeyword ⊆ description normalizada;
+
+if (expense_date foi fornecida?) then (sim)
+  :Usa a data informada\ndate_searched = expense_date;
+else (não)
+  :Calcula MAX(expense_date)\nentre registros encontrados\ndate_searched = data mais recente;
+endif
+
+:Filtra registros por date_searched;
+:Retorna {keyword, date_searched,\ntotal_found, records[]};
+
+'─────────────────────────────────────────────
+' Agente — Analisa resultados
+'─────────────────────────────────────────────
+|#F5F3FF|Agente — agent_node|
+if (total_found == 0?) then (sim)
+  :Informa usuário:\n"Não encontrei registros para '[keyword]'\nna data [date_searched].";
+  |#EEF2FF|Usuário|
+  :Lê resposta do agente;
+  if (Quer buscar\nem outro período?) then (sim)
+    :Informa nova data\nou descrição diferente;
+    note right: Reinicia o fluxo\ncom novo ainvoke
+    stop
+  else (não)
+    stop
+  endif
+else if (total_found == 1?) then (sim)
+  :Prossegue com o único\nregistro identificado;
+else (total_found > 1)
+  :Lista todos os registros\ncom ID, valor, descrição e data;
+  |#EEF2FF|Usuário|
+  :Lê a lista de candidatos\ne escolhe um (pelo número ou ID);
+  |#F5F3FF|Agente — agent_node|
+  :Registra expense_id escolhido\npelo usuário;
+  note right: Novo ainvoke com o\nID explícito do usuário
+endif
+
+:Chama delete_expense\n(expense_id=X, confirmed=False);
+
+'─────────────────────────────────────────────
+' LAYER 2 — guardrail_node
+'─────────────────────────────────────────────
+note right
+  **Layer 2 — guardrail_node**
+  should_call_tools inspeciona
+  o AIMessage antes do tool_node
+end note
+
+if (AIMessage contém mais de um\ndelete_expense no mesmo turno?\n[parallel tool calls]) then (sim)
+  #FECACA:guardrail_node — Layer 2\nInjeta ToolMessage stubs +\nAIMessage de bloqueio → END;
+  note right: Incidente 2026-05-12:\nbanco zerado por parallel calls\nCorrigido por este nó
+  |#EEF2FF|Usuário|
+  :Lê mensagem de segurança;
+  stop
+else (não\ndelete único)
+endif
+
+'─────────────────────────────────────────────
+' LAYER 3 — confirm_node / interrupt()
+'─────────────────────────────────────────────
+|#D1FAE5|confirm_node — interrupt() HITL|
+note right
+  **Layer 3 — confirm_node**
+  Toda operação destrutiva
+  passa por aqui — sem exceção
+end note
+
+:_get_expense_for_confirm(expense_id)\n↳ SELECT do banco para detalhar o registro;
+
+:Formata mensagem de confirmação:\n"Confirme a exclusão do registro:\n  ID #X · R$ Y · descrição ·\n  categoria · método · data\nTem certeza? (sim/não)";
+
+#D1FAE5:interrupt(mensagem)\n→ pausa a execução do grafo\nEstado salvo no AsyncSqliteSaver\n(checkpoints.db);
+
+|#EEF2FF|Usuário|
+:Lê a solicitação de confirmação\ncom todos os detalhes do registro;
+:Digita resposta;
+
+|#D1FAE5|confirm_node — interrupt() HITL|
+:Command(resume=resposta)\n↳ grafo retoma exatamente aqui;
+
+if (Resposta é confirmação válida?\n"sim", "confirmo", "yes",\n"pode", "confirmar") then (sim)
+  :Substitui AIMessage in-place\n(mesmo id → add_messages faz replace)\nconfirmed=False → confirmed=True;
+  :Command(update={messages:[new_ai]},\ngoto="tool_node");
+else (não / cancelar / qualquer outro)
+  #FECACA:Injeta ToolMessage stubs +\nAIMessage "Operação cancelada.\nNenhum registro foi alterado."\nCommand(goto=END);
+  |#EEF2FF|Usuário|
+  :Lê "Operação cancelada.";
+  stop
+endif
+
+'─────────────────────────────────────────────
+' LAYER 4 — MCP Server
+'─────────────────────────────────────────────
+|#FEF9C3|MCP Server — delete_expense|
+note right
+  **Layer 4 — MCP Server**
+  Última linha de defesa ativa.
+  Valida independente do agente.
+end note
+
+if (confirmed == True?) then (sim)
+else (não\nbypass tentado)
+  #FECACA:Rejeita — Layer 4\n"Exclusão requer confirmed=True";
+  stop
+endif
+
+:Busca registro no banco:\nSELECT WHERE id=? AND deleted_at IS NULL;
+
+if (Registro existe e está ativo?) then (sim)
+else (não encontrado\nou já excluído)
+  :Retorna {error: "não encontrado"};
+  |#F5F3FF|Agente — agent_node|
+  :Informa usuário;
+  stop
+endif
+
+:Captura old_data = JSON snapshot\ndo registro atual;
+
+'─────────────────────────────────────────────
+' LAYER 5 — SQLite (defesa passiva)
+'─────────────────────────────────────────────
+|#FFF1F0|SQLite — financas.db|
+note right
+  **Layer 5 — soft delete**
+  Dado nunca destruído fisicamente.
+  Recuperável a qualquer momento.
+end note
+
+fork
+  :UPDATE expenses\nSET deleted_at = CURRENT_TIMESTAMP\nWHERE id = expense_id;
+  note right: deleted_at ≠ NULL\nRegistro "desaparece"\npara todas as queries
+fork again
+  :INSERT INTO audit_log\n(operation="delete",\nexpense_id=X,\nold_data=JSON_snapshot);
+  note right: Imutável.\nNão exposto como tool.\nRastreabilidade total.
+end fork
+
+:Confirma operação ao MCP Server;
+
+|#FEF9C3|MCP Server — delete_expense|
+:Retorna {deleted:True,\nexpense_id:X, record:{...}};
+
+'─────────────────────────────────────────────
+' Agente — resposta final
+'─────────────────────────────────────────────
+|#F5F3FF|Agente — agent_node|
+:LLM recebe ToolMessage com resultado\ne gera confirmação final;
+
+|#EEF2FF|Usuário|
+:Lê confirmação:\n"✓ Registro #X excluído:\nR$ Y · descrição · data";
+
+stop
+
+@enduml
