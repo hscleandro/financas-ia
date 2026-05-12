@@ -4,7 +4,7 @@
 > Use este arquivo para retomar o contexto em novas sessões.
 >
 > **Última atualização:** 2026-05-12
-> **Status atual:** MVP 1 completo — registro, consulta, exclusão e edição com HITL funcionando (DA-001 a DA-011)
+> **Status atual:** MVP 2 em andamento — iniciando com Alembic (DA-012)
 
 ---
 
@@ -472,6 +472,29 @@ O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o con
   - Com `expense_date`: filtra por data exata informada
   - Sem `expense_date`: executa `MAX(expense_date)` para o keyword e filtra por essa data
   - Retorna `{keyword, date_searched, total_found, records}` — rastreável no LangSmith
+
+### DA-012: Alembic como gerenciador de migrations (MVP 2)
+- **Decisão:** Adotar Alembic para gerenciar toda evolução de schema a partir do MVP 2.
+- **Alternativa rejeitada:** continuar com `ALTER TABLE` manual em `setup.py`
+- **Motivo:** O schema já evoluiu duas vezes (added `deleted_at`, `audit_log`). O hack `ALTER TABLE IF NOT EXISTS` em `setup.py` não escala — Alembic é a solução certa agora.
+- **Modelo de convivência:**
+  - `setup_database()` permanece no `server.py` como safety net para o subprocesso MCP
+  - `main.py` chama `run_migrations()` (Alembic `upgrade head`) no startup — autoridade final sobre o schema
+  - Migrations usam `op.execute()` com SQL raw (sem SQLAlchemy ORM) — compatível com sqlite3 existente
+  - `0001_initial_schema` captura o estado atual como baseline; DBs existentes recebem `alembic stamp 0001`
+- **Regra futura:** qualquer mudança de schema passa por migration Alembic — nunca mais `ALTER TABLE` em `setup.py`
+
+### DA-013: Escopo do MVP 2 (análise crítica)
+- **Inclui:** SqliteSaver + trimming, interrupt() HITL, pytest, Alembic, retry OpenAI
+- **Exclui deliberadamente:** multi-agente, structlog, output guardrails, service layer, cache, feature flags
+- **Multi-agente rejeitado para MVP 2:** agente único já funciona bem; roteador triplicaria calls ao LLM; complexidade artificial sem ganho real
+- **structlog rejeitado:** LangSmith cobre ~90% da observabilidade necessária; adicionar structlog seria duplicação
+- **Critério de conclusão MVP 2:**
+  - Sessão anterior disponível ao reiniciar (`python main.py`)
+  - delete/update usam `interrupt()` real
+  - `pytest tests/` passa com ≥80% cobertura do MCP server
+  - Schema evoluível via `alembic upgrade head`
+  - Chamadas OpenAI com retry automático
 
 ### DA-011: Separação de responsabilidades — interpretação vs execução
 - **Decisão:** Interpretação temporal fica no LLM; lógica SQL fica no servidor MCP.

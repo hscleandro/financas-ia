@@ -50,13 +50,6 @@ def setup_database() -> None:
             );
         """)
 
-        # Migração para bancos existentes: adiciona deleted_at se não existir
-        try:
-            conn.execute("ALTER TABLE expenses ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL")
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass  # Coluna já existe
-
         for name in CATEGORIES:
             conn.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (name,))
         conn.commit()

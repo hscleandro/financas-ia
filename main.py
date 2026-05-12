@@ -9,11 +9,12 @@ if hasattr(sys.stdin, "reconfigure"):
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+from alembic import command
+from alembic.config import Config
 from langchain_core.messages import HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.graph import build_graph
-from database.setup import setup_database
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
@@ -26,14 +27,20 @@ MCP_CONFIG = {
 }
 
 
+def run_migrations() -> None:
+    """Aplica todas as migrations pendentes. Autoridade final sobre o schema."""
+    cfg = Config("alembic.ini")
+    command.upgrade(cfg, "head")
+
+
 async def run_chat() -> None:
-    setup_database()
+    run_migrations()
 
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
     print("=" * 50)
-    print("  Assistente Financeiro Pessoal — MVP 1")
+    print("  Assistente Financeiro Pessoal — MVP 2")
     print("  Digite 'sair' para encerrar.")
     print("=" * 50)
     print()
