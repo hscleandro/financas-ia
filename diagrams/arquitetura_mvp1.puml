@@ -1,0 +1,508 @@
+@startuml Visao_Geral_Sistema
+title MVP 1 — Visão Geral do Sistema\nControle Financeiro com Agentes de IA
+
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+
+skinparam actor {
+  BackgroundColor #EEF2FF
+  BorderColor #6366F1
+}
+skinparam rectangle {
+  BackgroundColor #EEF2FF
+  BorderColor #6366F1
+  RoundCorner 12
+}
+skinparam database {
+  BackgroundColor #FEF9C3
+  BorderColor #D97706
+}
+skinparam cloud {
+  BackgroundColor #F0FDF4
+  BorderColor #16A34A
+}
+skinparam note {
+  BackgroundColor #F5F3FF
+  BorderColor #7C3AED
+}
+
+actor "Usuário" as U
+
+rectangle "financas-ia (processo Python)" as APP {
+
+  rectangle "main.py\nCLI Loop" as CLI
+
+  rectangle "LangGraph\nStateGraph" as LG {
+    rectangle "agent_node\nChatOpenAI · temperature=0" as AN
+    rectangle "tool_node\nToolNode (MCP tools)" as TN
+    rectangle "MemorySaver\n(in-memory por sessão)" as MS
+  }
+
+  rectangle "MCP Client\nlangchain-mcp-adapters" as MC
+
+}
+
+rectangle "MCP Server\n(subprocesso stdio)" as MCP_SRV {
+  rectangle "FastMCP\nfinancas-mcp" as FMCP
+  rectangle "7 tools:\nrecord · query · summary\ncategories · find_candidates\ndelete · update" as TOOLS
+}
+
+database "financas.db\n(SQLite)" as DB {
+  rectangle "expenses\ncategories\naudit_log" as TABLES
+}
+
+cloud "OpenAI API\ngpt-4o-mini" as OAI
+cloud "LangSmith\nObservabilidade" as LS
+
+note right of MS
+  Contexto da conversa
+  preservado durante a sessão.
+  Perdido ao encerrar main.py.
+end note
+
+note right of MCP_SRV
+  Iniciado automaticamente
+  como subprocesso pelo
+  MCP Client via stdio.
+end note
+
+U      --> CLI      : digita mensagem
+CLI    --> LG       : HumanMessage
+AN     --> OAI      : chat completion
+OAI    --> AN       : resposta + tool_calls
+AN     --> TN       : tool_call detectado
+TN     --> MC       : executa tool
+MC     --> MCP_SRV  : stdio JSON-RPC
+FMCP   --> DB       : SELECT / INSERT / UPDATE
+DB     --> FMCP     : resultado
+MCP_SRV --> MC      : resposta JSON
+MC     --> TN       : ToolMessage
+TN     --> AN       : retorna ao agente
+AN     --> CLI      : resposta final
+CLI    --> U        : exibe resposta
+
+APP    ..> LS       : traces automáticos\n(LANGCHAIN_TRACING_V2)
+
+@enduml
+
+
+@startuml Componentes_e_Modulos
+title MVP 1 — Componentes e Módulos\nEstrutura de arquivos e responsabilidades
+
+skinparam backgroundColor #FAFAFA
+skinparam packageBackgroundColor #EEF2FF
+skinparam packageBorderColor #6366F1
+skinparam componentBackgroundColor #F5F3FF
+skinparam componentBorderColor #7C3AED
+skinparam interfaceBackgroundColor #FEF9C3
+skinparam interfaceBorderColor #D97706
+skinparam databaseBackgroundColor #FEF9C3
+skinparam databaseBorderColor #D97706
+
+package "financas-ia/" as ROOT {
+
+  component "main.py" as MAIN {
+    ' Entry point
+    ' asyncio.run(run_chat())
+    ' loop de input/output
+    ' thread_id por sessão
+  }
+
+  component "config.py" as CFG {
+    ' pydantic-settings
+    ' lê .env
+    ' openai_api_key
+    ' openai_model
+    ' db_path
+    ' langsmith settings
+  }
+
+  package "agent/" as AGT {
+    component "graph.py" as GRAPH {
+      ' StateGraph(AgentState)
+      ' agent_node (async)
+      ' tool_node (ToolNode)
+      ' MemorySaver
+      ' build_graph(tools)
+    }
+    component "prompts.py" as PROMPTS {
+      ' get_system_prompt()
+      ' Instruções de registro
+      ' Protocolo HITL delete/update
+      ' Normalização de datas
+    }
+    component "guardrails.py" as GUARDS {
+      ' validate_expense_intent()
+      ' requires_confirmation()
+      ' Utilitários de validação
+    }
+  }
+
+  package "mcp_server/" as SRV {
+    component "server.py" as SERVER {
+      ' FastMCP("financas-mcp")
+      ' 7 tools MCP
+      ' Lógica de hash SHA256
+      ' Soft delete
+      ' Audit log
+      ' Normalização Unicode
+    }
+  }
+
+  package "models/" as MDL {
+    component "schemas.py" as SCHEMAS {
+      ' ExpenseCreate (Pydantic)
+      ' ExpenseRecord
+      ' VALID_CATEGORIES
+      ' PaymentMethod (Literal)
+    }
+  }
+
+  package "database/" as DB_PKG {
+    component "setup.py" as SETUP {
+      ' setup_database()
+      ' get_connection()
+      ' CREATE TABLE IF NOT EXISTS
+      ' ALTER TABLE (migração)
+      ' seed categorias
+    }
+  }
+
+}
+
+database "financas.db" as SQLITEDB {
+  [expenses]
+  [categories]
+  [audit_log]
+}
+
+interface "OpenAI API" as OAI_IF
+interface "LangSmith" as LS_IF
+
+' Dependências
+MAIN    --> GRAPH   : build_graph(tools)
+MAIN    --> SETUP   : setup_database()
+GRAPH   --> PROMPTS : get_system_prompt()
+GRAPH   --> OAI_IF  : ChatOpenAI (langchain-openai)
+GRAPH   --> LS_IF   : auto-tracing
+SERVER  --> SCHEMAS : ExpenseCreate, VALID_CATEGORIES
+SERVER  --> SETUP   : get_connection()
+SETUP   --> CFG     : settings.db_path
+GRAPH   --> CFG     : settings.openai_*
+SETUP   --> SQLITEDB : cria / migra schema
+SERVER  --> SQLITEDB : SELECT / INSERT / UPDATE
+
+note bottom of SERVER
+  Roda como subprocesso separado.
+  Comunicação via stdin/stdout (stdio MCP).
+  Iniciado pelo MultiServerMCPClient.
+end note
+
+note bottom of GUARDS
+  Utilitários disponíveis para
+  uso futuro em nodes dedicados.
+  No MVP 1, validação principal
+  é feita pelo Pydantic no server.
+end note
+
+@enduml
+
+
+@startuml Fluxo_Registro_Gasto
+title MVP 1 — Fluxo: Registro de Gasto\n"Gastei 55 reais no almoço"
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam backgroundColor #FAFAFA
+skinparam participantBackgroundColor #EEF2FF
+skinparam participantBorderColor #6366F1
+skinparam sequenceArrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+skinparam noteBorderColor #D97706
+skinparam sequenceLifeLineBorderColor #6366F1
+
+actor       "Usuário"                   as U
+participant "main.py"                   as CLI
+participant "agent_node\n(LangGraph)"   as AG
+participant "OpenAI API\ngpt-4o-mini"   as OAI
+participant "tool_node\n(LangGraph)"    as TN
+participant "MCP Server\n(subprocesso)" as MS
+database    "SQLite"                    as DB
+
+U   -> CLI : "Gastei 55 reais no almoço"
+CLI -> AG  : ainvoke({messages: [HumanMessage]}, config)
+
+note over AG
+  Injeta SystemMessage com:
+  • data de hoje
+  • categorias válidas
+  • regras de extração
+end note
+
+AG  -> OAI : [SystemMessage, HumanMessage]
+OAI --> AG : AIMessage com tool_call:\nrecord_expense(amount=55.0,\ndescription="almoço",\ncategory="Alimentação",\nmethod="dinheiro",\nexpense_date="2026-05-12")
+
+note over AG,TN
+  Aresta condicional:
+  AIMessage tem tool_calls?
+  Sim → roteia para tool_node
+end note
+
+AG  -> TN  : tool_calls detectados
+
+TN  -> MS  : stdio JSON-RPC:\nrecord_expense(55.0, "almoço", ...)
+
+note over MS
+  1. Valida com ExpenseCreate (Pydantic)
+  2. Computa hash SHA256
+  3. INSERT INTO expenses
+end note
+
+MS  -> DB  : INSERT INTO expenses\n(55.0, "almoço", "Alimentação",\n"dinheiro", "2026-05-12", <hash>)
+DB  --> MS : id = 1
+MS  --> TN : ToolMessage: {id:1, amount:55.0,\ndescription:"almoço", ...}
+
+TN  -> AG  : retorna ao agent_node
+
+AG  -> OAI : [SystemMessage, HumanMessage,\nAIMessage(tool_call), ToolMessage(result)]
+OAI --> AG : AIMessage(content):\n"✓ R$ 55,00 · Alimentação · dinheiro · 12/05/2026"
+
+note over AG,TN
+  Aresta condicional:
+  AIMessage sem tool_calls?
+  Sim → roteia para END
+end note
+
+AG  --> CLI : {messages: [..., AIMessage]}
+CLI --> U   : "✓ R$ 55,00 · Alimentação · dinheiro · 12/05/2026"
+
+note over CLI
+  MemorySaver preserva todo o
+  histórico de mensagens no
+  thread_id desta sessão.
+end note
+
+@enduml
+
+
+@startuml Fluxo_Consulta_Resumo
+title MVP 1 — Fluxo: Consulta e Resumo\n"Quanto gastei esse mês?"
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam backgroundColor #FAFAFA
+skinparam participantBackgroundColor #EEF2FF
+skinparam participantBorderColor #6366F1
+skinparam sequenceArrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+
+actor       "Usuário"                   as U
+participant "agent_node\n(LangGraph)"   as AG
+participant "OpenAI API"                as OAI
+participant "tool_node\n(LangGraph)"    as TN
+participant "MCP Server"                as MS
+database    "SQLite"                    as DB
+
+U  -> AG  : "Quanto gastei esse mês?"
+
+AG -> OAI : [SystemMessage, HumanMessage]
+OAI --> AG : tool_call: get_summary(\nstart_date="2026-05-01",\nend_date="2026-05-31",\ngroup_by="category")
+
+AG -> TN  : tool_calls
+TN -> MS  : get_summary(...)
+
+MS -> DB  : SELECT category, SUM(amount), COUNT(*)\nFROM expenses\nWHERE expense_date BETWEEN ? AND ?\nAND deleted_at IS NULL\nGROUP BY category\nORDER BY total DESC
+DB --> MS : [{Alimentação: 90.0, 2}, {Transporte: 120.0, 1}]
+
+MS -> DB  : SELECT SUM(amount) ... (total geral)
+DB --> MS : 210.0
+
+MS --> TN : {group_by:"category",\nitems:[...], total_geral:210.0}
+TN --> AG : ToolMessage(result)
+
+AG -> OAI : [histórico + ToolMessage]
+OAI --> AG : "Em maio você gastou R$ 210,00:\n• Transporte: R$ 120,00 (1 lançamento)\n• Alimentação: R$ 90,00 (2 lançamentos)"
+
+AG --> U  : resposta formatada
+
+@enduml
+
+
+@startuml Grafo_LangGraph
+title MVP 1 — Grafo LangGraph\nStateGraph com ReAct Pattern
+
+skinparam backgroundColor #FAFAFA
+skinparam stateBackgroundColor #EEF2FF
+skinparam stateBorderColor #6366F1
+skinparam arrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+
+[*] --> agent_node : START\nHumanMessage entra no estado
+
+state "agent_node" as AN {
+  state "1. Monta contexto" as S1
+  state "2. Invoca LLM" as S2
+  state "3. Retorna AIMessage" as S3
+  S1 --> S2
+  S2 --> S3
+}
+
+state "tool_node" as TN {
+  state "Executa tool MCP" as T1
+  state "Retorna ToolMessage" as T2
+  T1 --> T2
+}
+
+state "END" as END_STATE
+
+AN --> TN         : [AIMessage tem tool_calls]\nshould_call_tools() == "tool_node"
+AN --> END_STATE  : [AIMessage sem tool_calls]\nshould_call_tools() == END
+TN --> AN         : sempre (loop ReAct)
+
+note right of AN
+  AgentState:
+  messages: Annotated[list[AnyMessage], add_messages]
+
+  Cada turno:
+  [SystemMessage] + histórico acumulado
+  → ChatOpenAI(model, temperature=0).bind_tools(tools)
+end note
+
+note right of TN
+  ToolNode executa as calls em paralelo
+  se houver múltiplas tool_calls.
+  Cada resultado vira um ToolMessage
+  adicionado ao estado.
+end note
+
+note bottom of END_STATE
+  Checkpointer: MemorySaver (in-memory)
+  thread_id: UUID gerado por sessão em main.py
+  Histórico persiste durante a sessão
+  e se perde ao encerrar o processo.
+end note
+
+@enduml
+
+
+@startuml Schema_Banco
+title MVP 1 — Schema do Banco de Dados\nSQLite · financas.db
+
+skinparam backgroundColor #FAFAFA
+skinparam entityBackgroundColor #FEF9C3
+skinparam entityBorderColor #D97706
+skinparam noteBackgroundColor #F5F3FF
+skinparam noteBorderColor #7C3AED
+
+entity "expenses" as EXP {
+  * id           : INTEGER  PK AUTOINCREMENT
+  --
+  * amount       : REAL     CHECK(> 0 AND < 100000)
+  * description  : TEXT
+  * category     : TEXT     REFERENCES categories(name)
+  * method       : TEXT     CHECK(in valid_methods)
+  * expense_date : DATE     DEFAULT CURRENT_DATE
+  * created_at   : TIMESTAMP DEFAULT NOW
+  * hash         : TEXT     UNIQUE
+  + deleted_at   : TIMESTAMP NULL
+}
+
+entity "categories" as CAT {
+  * id         : INTEGER  PK AUTOINCREMENT
+  --
+  * name       : TEXT     UNIQUE
+  * created_at : TIMESTAMP DEFAULT NOW
+}
+
+entity "audit_log" as AUDIT {
+  * id         : INTEGER  PK AUTOINCREMENT
+  --
+  * operation  : TEXT     CHECK(in 'delete','update')
+  * expense_id : INTEGER
+  * old_data   : TEXT     (JSON snapshot antes)
+  + new_data   : TEXT     (JSON snapshot depois)
+  * created_at : TIMESTAMP DEFAULT NOW
+}
+
+EXP }|--|| CAT   : "category → name"
+EXP |o--o{ AUDIT : "expense_id"
+
+note right of EXP
+  deleted_at = NULL  → registro ativo
+  deleted_at = data  → soft deleted
+  Todas as queries filtram:
+  WHERE deleted_at IS NULL
+
+  hash = SHA256(amount|desc_normalizada|date)
+  Garante deduplicação automática.
+end note
+
+note right of CAT
+  10 categorias fixas (seed):
+  Alimentação · Transporte · Moradia
+  Saúde · Lazer · Educação · Vestuário
+  Tecnologia · Serviços · Outros
+end note
+
+note right of AUDIT
+  Imutável: nunca alterado pelo sistema.
+  Não exposto como MCP tool.
+  Consultável via SQLite direto.
+  Cresce ~1 linha por delete/update.
+end note
+
+@enduml
+
+
+@startuml Camadas_Arquiteturais
+title MVP 1 — Camadas Arquiteturais\ne Fluxo de Dados
+
+skinparam backgroundColor #FAFAFA
+skinparam rectangleBackgroundColor #EEF2FF
+skinparam rectangleBorderColor #6366F1
+skinparam arrowColor #6366F1
+
+rectangle "CAMADA DE ENTRADA" as L_IN #D1FAE5 {
+  rectangle "main.py\nasyncio · stdin/stdout UTF-8\nthread_id por sessão (UUID)" as MAIN
+}
+
+rectangle "CAMADA DE ORQUESTRAÇÃO" as L_ORCH #EEF2FF {
+  rectangle "LangGraph StateGraph\nReAct: agent_node ⇄ tool_node\nMemorySaver (contexto in-memory)" as LG
+  rectangle "SystemPrompt\nRegras de negócio e comportamento\nprotocolo HITL · normalização de datas" as SP
+}
+
+rectangle "CAMADA DE INTELIGÊNCIA" as L_AI #F5F3FF {
+  rectangle "OpenAI gpt-4o-mini\ntemperature=0\nextração · classificação · decisão" as AI
+}
+
+rectangle "CAMADA DE PROTOCOLO" as L_PROTO #FEF9C3 {
+  rectangle "MCP Client\nlangchain-mcp-adapters\nTranslates LangChain ↔ MCP" as MC
+  rectangle "stdio transport\nsubprocesso isolado" as STDIO
+  rectangle "MCP Server (FastMCP)\n7 tools · validação Pydantic\nsoft delete · audit log" as MS
+}
+
+rectangle "CAMADA DE DADOS" as L_DATA #FEE2E2 {
+  rectangle "SQLite (financas.db)\nexpenses · categories · audit_log" as DB
+}
+
+rectangle "OBSERVABILIDADE" as L_OBS #F0FDF4 {
+  rectangle "LangSmith\nauto-tracing via env vars\nproject: financas-ia-mvp1" as LS
+}
+
+MAIN  -down-> LG
+LG    -down-> AI   : chamadas LLM
+LG    -down-> MC   : tool calls
+LG    ..>     LS   : traces
+SP    -right-> LG  : injeta contexto
+MC    -down-> STDIO
+STDIO -down-> MS
+MS    -down-> DB
+
+note bottom of DB
+  Regra de ouro:
+  MCP Server = banco de dados inteligente
+  LangGraph  = cérebro (lógica de negócio)
+  Nunca inverter essa relação.
+end note
+
+@enduml

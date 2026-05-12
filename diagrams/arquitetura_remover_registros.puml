@@ -1,0 +1,375 @@
+@startuml Fluxo_HITL_Delete_Sem_Data
+title Fluxo HITL — Exclusão SEM data explícita\n"apaga o almoço"
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam backgroundColor #FAFAFA
+skinparam participantBackgroundColor #EEF2FF
+skinparam participantBorderColor #6366F1
+skinparam sequenceArrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+skinparam noteBorderColor #D97706
+
+actor       "Usuário"                       as U
+participant "LangGraph\nAgente"             as AG
+participant "MCP Server\n(find_expense_candidates)" as MS
+database    "SQLite"                        as DB
+
+U  -> AG : "apaga o almoço"
+
+note over AG #EEF2FF
+  Sem referência temporal detectada.
+  Não passa expense_date.
+end note
+
+AG -> MS : find_expense_candidates\n(keyword="almoço")
+
+MS -> DB : SELECT MAX(expense_date)\nFROM expenses\nWHERE description LIKE '%almoco%'\nAND deleted_at IS NULL
+DB --> MS : 2026-05-12
+
+MS -> DB : SELECT * FROM expenses\nWHERE description LIKE '%almoco%'\nAND expense_date = '2026-05-12'\nAND deleted_at IS NULL
+DB --> MS : [{id:3, R$55, almoço, 12/05}, {id:4, R$42, almoço pf, 12/05}]
+
+MS --> AG : {keyword:"almoço", date_searched:"2026-05-12",\ntotal_found:2, records:[...]}
+
+note over AG #FEF9C3
+  Múltiplos registros na data mais recente.
+  Deve listar e pedir escolha.
+  NÃO chama delete_expense.
+end note
+
+AG --> U : "Encontrei 2 registros de 'almoço' em 12/05/2026:\n\n  #3 · R$ 55,00 · Alimentação · dinheiro\n  #4 · R$ 42,00 · almoço pf  · Alimentação · pix\n\nQual deseja excluir?"
+
+U  -> AG : "o segundo"
+
+note over AG #FEF9C3
+  Identificou registro #4.
+  Ainda NÃO chama delete_expense.
+  Deve mostrar detalhes e pedir confirmação.
+end note
+
+AG --> U : "Você solicitou a exclusão do registro:\n\n  ID #4 · R$ 42,00 · almoço pf\n  Alimentação · pix · 12/05/2026\n\nTem certeza? (sim/não)"
+
+U  -> AG : "sim"
+
+note over AG #D1FAE5
+  Confirmação explícita na mensagem ATUAL.
+  Passa confirmed=True.
+end note
+
+AG -> MS : delete_expense(expense_id=4, confirmed=True)
+MS -> DB : UPDATE expenses SET deleted_at=NOW() WHERE id=4
+MS -> DB : INSERT INTO audit_log (delete, 4, old_data_json)
+DB --> MS : OK
+MS --> AG : {deleted:true, expense_id:4, record:{...}}
+
+AG --> U : "✓ Registro #4 excluído:\nR$ 42,00 · almoço pf · 12/05/2026"
+
+@enduml
+
+
+@startuml Fluxo_HITL_Delete_Com_Data
+title Fluxo HITL — Exclusão COM data explícita\n"apaga o almoço de ontem"
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam backgroundColor #FAFAFA
+skinparam participantBackgroundColor #EEF2FF
+skinparam participantBorderColor #6366F1
+skinparam sequenceArrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+skinparam noteBorderColor #D97706
+
+actor       "Usuário"           as U
+participant "LangGraph\nAgente" as AG
+participant "MCP Server"        as MS
+database    "SQLite"            as DB
+
+U  -> AG : "apaga o almoço de ontem"
+
+note over AG #D1FAE5
+  Referência temporal detectada: "ontem".
+  Hoje (do system prompt) = 2026-05-12.
+  LLM converte: "ontem" → 2026-05-11.
+  Passa expense_date resolvida.
+end note
+
+AG -> MS : find_expense_candidates\n(keyword="almoço", expense_date="2026-05-11")
+
+MS -> DB : SELECT * FROM expenses\nWHERE description LIKE '%almoco%'\nAND expense_date = '2026-05-11'\nAND deleted_at IS NULL
+DB --> MS : [{id:2, R$55, almoço, 11/05}]
+
+MS --> AG : {keyword:"almoço", date_searched:"2026-05-11",\ntotal_found:1, records:[{id:2,...}]}
+
+note over AG #FEF9C3
+  Um único registro encontrado.
+  Exibe detalhes e pede confirmação diretamente.
+  NÃO chama delete_expense ainda.
+end note
+
+AG --> U : "Você solicitou a exclusão do registro:\n\n  ID #2 · R$ 55,00 · almoço\n  Alimentação · dinheiro · 11/05/2026\n\nTem certeza? (sim/não)"
+
+U  -> AG : "sim"
+
+AG -> MS : delete_expense(expense_id=2, confirmed=True)
+MS -> DB : UPDATE expenses SET deleted_at=NOW() WHERE id=2
+MS -> DB : INSERT INTO audit_log (delete, 2, old_data_json)
+DB --> MS : OK
+MS --> AG : {deleted:true, expense_id:2}
+
+AG --> U : "✓ Registro #2 excluído:\nR$ 55,00 · almoço · 11/05/2026"
+
+@enduml
+
+
+@startuml Fluxo_HITL_Delete_Zero_Resultados
+title Fluxo HITL — Nenhum resultado encontrado\n"apaga o almoço de ontem"
+
+skinparam sequenceMessageAlign center
+skinparam backgroundColor #FAFAFA
+skinparam participantBackgroundColor #EEF2FF
+skinparam participantBorderColor #6366F1
+skinparam sequenceArrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+
+actor       "Usuário"           as U
+participant "LangGraph\nAgente" as AG
+participant "MCP Server"        as MS
+database    "SQLite"            as DB
+
+U  -> AG : "apaga o almoço de ontem"
+
+AG -> MS : find_expense_candidates\n(keyword="almoço", expense_date="2026-05-11")
+MS -> DB : SELECT ...
+DB --> MS : []
+MS --> AG : {keyword:"almoço", date_searched:"2026-05-11",\ntotal_found:0, records:[]}
+
+note over AG #FEE2E2
+  Nenhum resultado.
+  NÃO chama delete_expense.
+  Oferece alternativa.
+end note
+
+AG --> U : "Não encontrei nenhum registro de 'almoço'\nem 11/05/2026.\n\nDeseja que eu busque em outra data\nou mostre os mais recentes?"
+
+@enduml
+
+
+@startuml Fluxo_HITL_Update
+title Fluxo HITL — Edição de Registro\n"o almoço de ontem foi 65 reais, não 55"
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam backgroundColor #FAFAFA
+skinparam participantBackgroundColor #EEF2FF
+skinparam participantBorderColor #6366F1
+skinparam sequenceArrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+skinparam noteBorderColor #D97706
+
+actor       "Usuário"           as U
+participant "LangGraph\nAgente" as AG
+participant "MCP Server"        as MS
+database    "SQLite"            as DB
+
+U  -> AG : "o almoço de ontem foi 65 reais, não 55"
+
+note over AG #D1FAE5
+  Intenção: edição (não exclusão).
+  Data: "ontem" → 2026-05-11.
+  Campo a alterar: amount 55 → 65.
+end note
+
+AG -> MS : find_expense_candidates\n(keyword="almoço", expense_date="2026-05-11")
+MS -> DB : SELECT ...
+DB --> MS : [{id:2, amount:55.0, ...}]
+MS --> AG : {total_found:1, records:[{id:2, amount:55.0}]}
+
+note over AG #FEF9C3
+  Registro encontrado.
+  Monta diff para exibir ao usuário.
+  NÃO chama update_expense ainda.
+end note
+
+AG --> U : "Você deseja fazer a seguinte alteração?\n\n  Registro #2 · almoço · 11/05/2026\n  ┌──────────┬─────────┬──────────┐\n  │  Campo   │  Antes  │  Depois  │\n  │  amount  │ R$55,00 │ R$65,00  │\n  └──────────┴─────────┴──────────┘\n\nConfirmar? (sim/não)"
+
+U  -> AG : "sim"
+
+AG -> MS : update_expense(expense_id=2, confirmed=True, amount=65.0)
+
+MS -> DB : SELECT old_data WHERE id=2
+MS -> DB : UPDATE expenses SET amount=65.0,\nhash=<hash_recalculado> WHERE id=2
+MS -> DB : INSERT INTO audit_log\n(update, 2, old_data_json, new_data_json)
+DB --> MS : OK
+MS --> AG : {updated:true, old:{amount:55.0}, new:{amount:65.0}}
+
+AG --> U : "✓ Registro #2 atualizado:\nR$ 55,00 → R$ 65,00 · almoço · 11/05/2026"
+
+@enduml
+
+
+@startuml Camadas_de_Segurança
+title Camadas de Segurança — Operações Destrutivas (Delete e Update)
+
+skinparam backgroundColor #FAFAFA
+
+rectangle "LAYER 1 — LLM / System Prompt" as L1 #D1FAE5 {
+  note as N1
+    Interpretação semântica (o LLM é responsável por):
+    ─────────────────────────────────────────────────
+    • Detectar intenção de exclusão ou edição
+    • Converter data natural → YYYY-MM-DD
+      ("ontem" → hoje-1, "02/03" → 2026-03-02)
+    • Se data for range ("semana passada") → não converter,
+      tratar como ausente (lógica de mais recente no servidor)
+    • Nunca passar confirmed=True sem confirmação
+      na mensagem ATUAL do usuário
+    • Confirmações válidas: "sim", "confirmo", "yes", "pode"
+    • Sempre usar find_expense_candidates antes de deletar/editar
+  end note
+}
+
+rectangle "LAYER 2 — MCP Tool: find_expense_candidates" as L2 #FEF9C3 {
+  note as N2
+    Busca determinística no servidor:
+    ─────────────────────────────────────────────────
+    • Com expense_date  → filtra por data exata
+    • Sem expense_date  → MAX(expense_date) para keyword,
+                         depois filtra por essa data
+    • Normaliza keyword: lowercase + remove acentos
+    • Retorna: {keyword, date_searched, total_found, records}
+    • Zero registros → retorna estrutura vazia (não erro)
+  end note
+}
+
+rectangle "LAYER 3 — MCP Tools: delete_expense / update_expense" as L3 #FEE2E2 {
+  note as N3
+    Gate técnico de confirmação:
+    ─────────────────────────────────────────────────
+    • confirmed=False (default) → rejeita imediatamente
+    • Valida expense_id: existe? já soft-deleted?
+    • delete: apenas 1 registro por ID
+    • update: valida cada campo individualmente (Pydantic)
+    • update: recalcula hash se amount/description/date mudar
+    • update: impede duplicata após mudança (UNIQUE hash)
+    • Exclusão em massa: impossível por estrutura (id: int)
+  end note
+}
+
+rectangle "LAYER 4 — Soft Delete + Audit Log" as L4 #F3E8FF {
+  note as N4
+    Dado nunca é destruído:
+    ─────────────────────────────────────────────────
+    • DELETE físico não existe no sistema
+    • deleted_at = TIMESTAMP (soft delete)
+    • Todas as queries filtram WHERE deleted_at IS NULL
+    • audit_log: snapshot JSON before/after por operação
+    • audit_log nunca exposto como MCP tool (write-only pelo server)
+    • Permite recuperação manual via SQLite direto
+  end note
+}
+
+L1 -[hidden]-> L2
+L2 -[hidden]-> L3
+L3 -[hidden]-> L4
+
+@enduml
+
+
+@startuml Decisão_Camadas_Lógica
+title Onde cada lógica vive — Separação de Responsabilidades
+
+skinparam backgroundColor #FAFAFA
+skinparam rectangleBackgroundColor #EEF2FF
+skinparam rectangleBorderColor #6366F1
+
+rectangle "LLM (System Prompt)" as LLM #D1FAE5 {
+  note as N_LLM
+    Interpretação semântica:
+    • "ontem"          → 2026-05-11
+    • "02/03"          → 2026-03-02
+    • "almoço"         → keyword para busca
+    • "semana passada" → não converte (range)
+    • "sim" / "confirmo" → sinal de confirmação
+    • Detecção de intenção: excluir vs editar vs consultar
+  end note
+}
+
+rectangle "MCP Server (Python)" as MCP #FEF9C3 {
+  note as N_MCP
+    Lógica determinística:
+    • MAX(expense_date) para keyword
+    • LIKE + normalização de texto (sem acento)
+    • Validações Pydantic de campos
+    • Recálculo de hash após update
+    • Soft delete (UPDATE deleted_at)
+    • Gravação no audit_log
+  end note
+}
+
+rectangle "LangGraph (Graph structure)" as LG #EEF2FF {
+  note as N_LG
+    Orquestração de ferramentas:
+    • Loop agent_node ↔ tool_node (sem mudanças)
+    • Sem nós extras para intent detection
+    • System prompt instrui o fluxo correto
+    • MemorySaver preserva contexto da confirmação
+  end note
+}
+
+LLM -[hidden]r-> MCP
+MCP -[hidden]r-> LG
+
+@enduml
+
+
+@startuml Schema_Banco
+title Schema do Banco — Com Soft Delete e Audit Log
+
+skinparam backgroundColor #FAFAFA
+
+entity "expenses" as E {
+  * id           : INTEGER PK AUTOINCREMENT
+  --
+  * amount       : REAL  CHECK(> 0 AND < 100000)
+  * description  : TEXT
+  * category     : TEXT  REFERENCES categories(name)
+  * method       : TEXT  CHECK(in valid_methods)
+  * expense_date : DATE
+  * created_at   : TIMESTAMP DEFAULT NOW
+  * hash         : TEXT  UNIQUE
+  + deleted_at   : TIMESTAMP NULL
+}
+
+note right of E
+  Queries de leitura: WHERE deleted_at IS NULL
+  Soft delete:  UPDATE SET deleted_at = NOW()
+  Hard delete:  nunca executado pelo sistema
+end note
+
+entity "audit_log" as AL {
+  * id         : INTEGER PK AUTOINCREMENT
+  --
+  * operation  : TEXT CHECK(in 'delete','update')
+  * expense_id : INTEGER
+  * old_data   : TEXT  (JSON snapshot antes)
+  + new_data   : TEXT  (JSON snapshot depois; só em update)
+  * created_at : TIMESTAMP DEFAULT NOW
+}
+
+note right of AL
+  Imutável: nunca atualizado nem deletado
+  Não exposto como MCP tool
+  Consultável diretamente via SQLite
+end note
+
+entity "categories" as C {
+  * id         : INTEGER PK
+  * name       : TEXT UNIQUE
+  * created_at : TIMESTAMP
+}
+
+E }o--o{ AL : "expense_id"
+E }|--|| C  : "category"
+
+@enduml
