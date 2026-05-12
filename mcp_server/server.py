@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastmcp import FastMCP
 
 from database.setup import get_connection, setup_database
-from models.schemas import VALID_CATEGORIES, ExpenseCreate
+from models.schemas import ExpenseCreate
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,24 @@ VALID_METHODS = {"dinheiro", "crédito", "débito", "pix", "transferência"}
 
 
 # ─── Utilitários internos ────────────────────────────────────────────────────
+
+def _get_valid_categories() -> set[str]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT name FROM categories").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _validate_category_name(name: str) -> tuple[str, str | None]:
+    """Normaliza e valida um nome de categoria. Retorna (nome_normalizado, erro_ou_None)."""
+    clean = name.strip().title()
+    if len(clean) < 2:
+        return clean, "Nome da categoria deve ter pelo menos 2 caracteres."
+    if len(clean) > 30:
+        return clean, "Nome da categoria não pode exceder 30 caracteres."
+    if not all(c == " " or c == "-" or unicodedata.category(c).startswith("L") for c in clean):
+        return clean, "Nome da categoria deve conter apenas letras, espaços e hífens."
+    return clean, None
+
 
 def _normalize_description(text: str) -> str:
     text = text.lower().strip()
@@ -62,6 +80,13 @@ def record_expense(
         method: Método de pagamento (dinheiro, crédito, débito, pix, transferência)
         expense_date: Data do gasto no formato YYYY-MM-DD (padrão: hoje)
     """
+    valid_categories = _get_valid_categories()
+    if category not in valid_categories:
+        return {
+            "error": f"Categoria inválida: '{category}'. Use list_categories para ver as disponíveis.",
+            "tipo": "invalido",
+        }
+
     try:
         expense = ExpenseCreate(
             amount=amount,
@@ -214,6 +239,47 @@ def list_categories() -> list[str]:
     return [row["name"] for row in rows]
 
 
+@mcp.tool()
+def create_category(name: str, confirmed: bool) -> dict:
+    """Cria uma nova categoria de gastos definida pelo usuário.
+
+    ATENÇÃO: confirmed=True somente após confirmação explícita do usuário nessa mensagem.
+    Categorias do sistema (is_system=1) não podem ser substituídas; esta tool só cria
+    categorias novas (is_system=0).
+
+    Args:
+        name: Nome da nova categoria (será normalizado para title case)
+        confirmed: True apenas se o usuário confirmou explicitamente agora
+    """
+    if not confirmed:
+        return {
+            "error": "Criação de categoria requer confirmed=True. Mostre o nome ao usuário e aguarde confirmação.",
+            "tipo": "nao_confirmado",
+        }
+
+    clean, error = _validate_category_name(name)
+    if error:
+        return {"error": error, "tipo": "invalido"}
+
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT name FROM categories WHERE LOWER(name) = LOWER(?)", (clean,)
+        ).fetchone()
+        if existing:
+            return {
+                "error": f"Categoria '{existing['name']}' já existe.",
+                "tipo": "duplicata",
+            }
+
+        conn.execute(
+            "INSERT INTO categories (name, is_system) VALUES (?, 0)", (clean,)
+        )
+        conn.commit()
+
+    logger.info("Categoria criada pelo usuário: %s", clean)
+    return {"created": True, "name": clean}
+
+
 # ─── Tools de busca e operações destrutivas ──────────────────────────────────
 
 @mcp.tool()
@@ -355,8 +421,11 @@ def update_expense(
         changes["description"] = stripped
 
     if category is not None:
-        if category not in VALID_CATEGORIES:
-            return {"error": f"Categoria inválida: '{category}'.", "tipo": "invalido"}
+        if category not in _get_valid_categories():
+            return {
+                "error": f"Categoria inválida: '{category}'. Use list_categories para ver as disponíveis.",
+                "tipo": "invalido",
+            }
         changes["category"] = category
 
     if method is not None:

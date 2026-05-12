@@ -4,11 +4,6 @@ from typing import Literal, Optional
 
 PaymentMethod = Literal["dinheiro", "crédito", "débito", "pix", "transferência"]
 
-VALID_CATEGORIES = {
-    "Alimentação", "Transporte", "Moradia", "Saúde", "Lazer",
-    "Educação", "Vestuário", "Tecnologia", "Serviços", "Outros",
-}
-
 
 class ExpenseCreate(BaseModel):
     amount: float
@@ -23,15 +18,6 @@ class ExpenseCreate(BaseModel):
         if v <= 0 or v >= 100_000:
             raise ValueError(f"Valor deve ser entre 0 e 100.000, recebido: {v}")
         return round(v, 2)
-
-    @field_validator("category")
-    @classmethod
-    def validate_category(cls, v: str) -> str:
-        if v not in VALID_CATEGORIES:
-            raise ValueError(
-                f"Categoria inválida: '{v}'. Use uma de: {', '.join(sorted(VALID_CATEGORIES))}"
-            )
-        return v
 
     @field_validator("expense_date", mode="before")
     @classmethod

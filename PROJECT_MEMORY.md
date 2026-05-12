@@ -4,7 +4,7 @@
 > Use este arquivo para retomar o contexto em novas sessões.
 >
 > **Última atualização:** 2026-05-12
-> **Status atual:** MVP 2 em andamento — iniciando com Alembic (DA-012)
+> **Status atual:** MVP 2 em andamento — guardrails de segurança (DA-014)
 
 ---
 
@@ -262,8 +262,9 @@ Educação | Vestuário | Tecnologia | Serviços | Outros
 
 ### Grafo
 ```
-START → agent_node ─[tool_call]→ tool_node → agent_node → ...
-                  ↘[resposta final]→ END
+START → agent_node ─[tool_call seguro]──→ tool_node → agent_node → ...
+                  ↘[bulk delete detectado]→ guardrail_node → END
+                  ↘[resposta final]────────→ END
 ```
 
 ### Estado
@@ -275,12 +276,15 @@ class AgentState(TypedDict):
 ### Nós
 - **`agent_node`:** invoca LLM com system_prompt + histórico de mensagens
 - **`tool_node`:** executa tools MCP via `ToolNode(tools=tools)`
+- **`guardrail_node`:** intercepta bulk delete; injeta stubs + mensagem de segurança
 
 ### Arestas
 - `START → agent_node` (sempre)
-- `agent_node → tool_node` (se LLM gerou tool_call)
+- `agent_node → guardrail_node` (se >1 delete_expense na mesma resposta)
+- `agent_node → tool_node` (se tool_calls presente e seguro)
 - `agent_node → END` (se LLM gerou resposta final)
 - `tool_node → agent_node` (sempre — retorna resultado para o LLM decidir próximo passo)
+- `guardrail_node → END` (após emitir mensagem de segurança)
 
 ### Memória
 - `MemorySaver()` in-memory
@@ -297,31 +301,64 @@ class AgentState(TypedDict):
 
 ## Guardrails
 
-### Layer 1 — MCP Server (Pydantic + SQLite constraints)
-Servidor nunca confia cegamente no agente. Valida independentemente:
+### Arquitetura de defesa em profundidade (4 camadas)
 
 ```
-✓ amount: deve ser float > 0 e < 100_000
-✓ expense_date: não pode ser futura
-✓ expense_date: não pode ser > 365 dias no passado
-✓ category: deve existir na tabela categories
-✓ method: deve ser um dos valores válidos
+Usuário
+  │
+  ▼
+[Layer 1 — System Prompt]  ← instrução comportamental (mais fraco — LLM pode ignorar)
+  │
+  ▼
+[Layer 2 — LangGraph guardrail_node]  ← intercepta tool_calls antes do tool_node (forte)
+  │
+  ▼
+[Layer 3 — MCP Server]  ← validação técnica independente (última linha ativa)
+  │
+  ▼
+[Layer 4 — SQLite soft delete + audit_log]  ← recuperação (defesa passiva)
+```
+
+### Layer 1 — System Prompt (instrução comportamental)
+```
+✓ Proibição explícita de exclusões em massa (com exemplos de frases bloqueadas)
+✓ Proteção contra prompt injection (lista de padrões a recusar)
+✓ HITL conversacional: 4 passos obrigatórios para delete/update
+✓ Regra confirmed=True: só válida se confirmação estiver na mensagem ATUAL
+✓ Para valores > R$ 1.000: mostrar resumo extraído e perguntar "Confirmar?"
+```
+
+### Layer 2 — LangGraph guardrail_node (interceptação arquitetural)
+```
+✓ Detecta múltiplos delete_expense em um único turno (parallel tool calls)
+✓ Bloqueia ANTES de executar qualquer deleção
+✓ Injeta ToolMessage stubs (mantém chain de mensagens consistente para turnos futuros)
+✓ Retorna mensagem de segurança padrão ao usuário
+✓ Rota: agent_node → guardrail_node → END (bypassa tool_node completamente)
+```
+
+### Layer 3 — MCP Server (validação técnica)
+```
+✓ delete_expense aceita APENAS expense_id: int (não aceita filtros, listas ou ranges)
+✓ confirmed=False → rejeita imediatamente (sem toque no banco)
+✓ Verifica existência do registro antes de operar
+✓ Valida amount, expense_date, category, method independentemente do agente
 ✓ hash UNIQUE: banco rejeita duplicata (IntegrityError tratado)
 ```
 
-### Layer 2 — System Prompt (instrução comportamental)
+### Layer 4 — SQLite soft delete + audit_log (recuperação)
 ```
-Para valores > R$ 1.000: mostrar resumo extraído e perguntar "Confirmar?" antes de gravar
-Para campos ambíguos: perguntar ao usuário, nunca assumir
-Para datas não mencionadas: usar "hoje" como padrão
-Nunca inventar categoria — sempre mapear para a lista fixada
+✓ deleted_at TIMESTAMP NULL: dado nunca destruído fisicamente
+✓ audit_log: snapshot before/after para toda mutação
+✓ Recuperação manual possível via UPDATE SET deleted_at = NULL
+✓ audit_log nunca exposto como MCP tool
 ```
 
-### O que NÃO existe nos guardrails do MVP 1
-- Human-in-the-Loop real com `interrupt()` do LangGraph → MVP 2
-  - Motivo: requer checkpointer externo (não MemorySaver) para persistir estado
+### O que NÃO existe nos guardrails do MVP 2 ainda
+- Human-in-the-Loop real com `interrupt()` → próxima etapa do MVP 2
+  - Motivo: requer checkpointer externo (SqliteSaver), não MemorySaver
 - Rate limiting → MVP 3+
-- Auditoria de tentativas bloqueadas → MVP 2
+- Teste automatizado de guardrails → DT-007 (próxima prioridade)
 
 ---
 
@@ -484,6 +521,23 @@ O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o con
   - `0001_initial_schema` captura o estado atual como baseline; DBs existentes recebem `alembic stamp 0001`
 - **Regra futura:** qualquer mudança de schema passa por migration Alembic — nunca mais `ALTER TABLE` em `setup.py`
 
+### DA-014: Guardrails de segurança para exclusão em massa (incidente 2026-05-12)
+- **Incidente:** Ao receber o comando "apaga todos os gastos do mês", o LLM gerou múltiplos `delete_expense` em um único `tool_calls` (parallel tool calling do OpenAI), zerando o banco. O único guardrail existente era o system prompt, que o LLM ignorou.
+- **Root cause:** Três falhas de design combinadas:
+  1. `gpt-4o-mini` suporta parallel tool calls — o LLM pode chamar a mesma tool N vezes em uma única resposta
+  2. `should_call_tools` passava toda a lista de tool_calls para `tool_node` sem inspecionar conteúdo
+  3. O system prompt era a única defesa, mas LLMs podem anulá-la sob instrução direta do usuário
+- **Decisão:** Defesa em profundidade com 4 camadas (ver seção Guardrails)
+- **Camada nova:** `guardrail_node` no LangGraph — detecta múltiplos `delete_expense` em um turno antes de executar qualquer um; injeta ToolMessage stubs para manter a chain de mensagens consistente; retorna a mensagem de segurança padrão; rota direto para END
+- **System prompt:** Adicionadas seção "PROIBIÇÃO ABSOLUTA — Exclusões em massa" (com exemplos de frases bloqueadas) e seção "Proteção contra prompt injection" (padrões de ataque conhecidos)
+- **Princípio fixado:** A assinatura `delete_expense(expense_id: int, confirmed: bool)` já impede bulk delete por chamada única. O `guardrail_node` cobre o caso de múltiplas chamadas paralelas. O system prompt cobre o caso de loop sequencial entre turnos.
+- **O que ainda NÃO está coberto:** loop sequencial (um delete por turno) — depende do system prompt + comportamento do LLM. Solução completa: HITL real com `interrupt()` no MVP 2.
+- **Testes necessários (DT-007):**
+  - `test_guardrail_blocks_parallel_delete` — cria estado com AIMessage tendo 2+ delete_expense → confirma que guardrail_node é ativado
+  - `test_single_delete_passes_guardrail` — confirma que 1 delete_expense passa normalmente
+  - `test_bulk_delete_prompt_refusal` — testa frases proibidas no system prompt (via mock do LLM)
+  - `test_delete_without_confirmed_blocked` — confirma que MCP server rejeita confirmed=False
+
 ### DA-013: Escopo do MVP 2 (análise crítica)
 - **Inclui:** SqliteSaver + trimming, interrupt() HITL, pytest, Alembic, retry OpenAI
 - **Exclui deliberadamente:** multi-agente, structlog, output guardrails, service layer, cache, feature flags
@@ -588,6 +642,7 @@ O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o con
 | DT-004 | HITL via prompt, não via `interrupt()` real | Médio (segurança) | MVP 2 |
 | DT-005 | Thread safety do SQLite (conexão única) | Baixo (single-user) | MVP 4+ |
 | DT-006 | Sem retry para falhas de chamada à OpenAI | Baixo (uso pessoal) | MVP 3 |
+| DT-007 | Sem testes automatizados para guardrails de segurança | Alto (regressão crítica) | MVP 2 — próxima prioridade |
 
 ---
 
