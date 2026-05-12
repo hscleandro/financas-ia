@@ -1,0 +1,557 @@
+@startuml Visao_Geral_MVP2
+title MVP 2 — Visão Geral do Sistema\nControle Financeiro com Agentes de IA
+
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+
+skinparam actor {
+  BackgroundColor #EEF2FF
+  BorderColor #6366F1
+}
+skinparam rectangle {
+  BackgroundColor #EEF2FF
+  BorderColor #6366F1
+  RoundCorner 12
+}
+skinparam database {
+  BackgroundColor #FEF9C3
+  BorderColor #D97706
+}
+skinparam cloud {
+  BackgroundColor #F0FDF4
+  BorderColor #16A34A
+}
+skinparam note {
+  BackgroundColor #F5F3FF
+  BorderColor #7C3AED
+}
+
+actor "Usuário" as U
+
+rectangle "financas-ia (processo Python)" as APP {
+
+  rectangle "main.py\nCLI Loop · _invoke()" as CLI
+
+  rectangle "LangGraph StateGraph" as LG {
+    rectangle "agent_node\nChatOpenAI · temperature=0\ntrim_messages (max 40)" as AN
+    rectangle "tool_node\nToolNode (MCP tools)" as TN
+    rectangle "guardrail_node\nbulk delete detector" as GN #FECACA
+    rectangle "confirm_node\ninterrupt() HITL" as CN #D1FAE5
+    rectangle "AsyncSqliteSaver\n(checkpoints.db)" as SS #FEF9C3
+  }
+
+  rectangle "MCP Client\nlangchain-mcp-adapters" as MC
+  rectangle "Alembic\nrun_migrations() no startup" as ALB #F5F3FF
+
+}
+
+rectangle "MCP Server\n(subprocesso stdio)" as MCP_SRV {
+  rectangle "FastMCP  financas-mcp" as FMCP
+  rectangle "8 tools:\nrecord · query · summary · list_categories\ncreate_category · find_candidates\ndelete · update" as TOOLS
+}
+
+database "financas.db\n(SQLite)" as DB {
+  rectangle "expenses · categories (+ is_system)\naudit_log" as TABLES
+}
+
+database "checkpoints.db\n(SQLite)" as CDB
+
+cloud "OpenAI API\ngpt-4o-mini" as OAI
+cloud "LangSmith\nObservabilidade" as LS
+
+note right of SS
+  Sessão persiste entre
+  reinicializações do processo.
+  thread_id = "default" (fixo).
+  Histórico trimado para o LLM
+  (max 40 mensagens).
+end note
+
+note right of CN
+  interrupt() pausa o grafo.
+  Patch in-place no AIMessage
+  (confirmed=False → True)
+  via Command(goto="tool_node").
+end note
+
+note right of ALB
+  Executa alembic upgrade head
+  no startup. Autoridade final
+  sobre o schema do banco.
+end note
+
+U      --> CLI      : digita mensagem
+CLI    --> LG       : HumanMessage
+AN     --> OAI      : chat completion
+OAI    --> AN       : resposta + tool_calls
+AN     --> GN       : bulk delete detectado
+AN     --> CN       : delete/update detectado
+AN     --> TN       : tool_calls seguros
+CN     --> TN       : após confirmação (Command)
+TN     --> MC       : executa tool
+MC     --> MCP_SRV  : stdio JSON-RPC
+FMCP   --> DB       : SELECT / INSERT / UPDATE
+DB     --> FMCP     : resultado
+MCP_SRV --> MC      : resposta JSON
+MC     --> TN       : ToolMessage
+TN     --> AN       : retorna ao agente
+AN     --> CLI      : resposta final
+CLI    --> U        : exibe resposta
+
+SS     ..> CDB      : persiste estado
+APP    ..> LS       : traces automáticos
+
+@enduml
+
+
+@startuml Grafo_LangGraph_MVP2
+title MVP 2 — Grafo LangGraph\nStateGraph com 4 nós e HITL por interrupt()
+
+skinparam backgroundColor #FAFAFA
+skinparam stateBackgroundColor #EEF2FF
+skinparam stateBorderColor #6366F1
+skinparam arrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+skinparam noteBorderColor #D97706
+
+[*] --> agent_node : START
+
+state "agent_node" as AN {
+  state "1. trim_messages (max 40)" as S1
+  state "2. [SystemMessage] + histórico" as S2
+  state "3. ainvoke LLM" as S3
+  state "4. retorna AIMessage" as S4
+  S1 --> S2
+  S2 --> S3
+  S3 --> S4
+}
+
+state "guardrail_node" as GN #FECACA {
+  state "Injeta ToolMessage stubs" as G1
+  state "AIMessage: exclusão em massa\nnão é permitida" as G2
+  G1 --> G2
+}
+
+state "confirm_node" as CN #D1FAE5 {
+  state "interrupt(_format_confirmation)\n→ pausa o grafo" as C1
+  state "Command(resume=resposta)" as C2
+  state "sim?" as C3
+  state "patch AIMessage\nconfirmed=True\nCommand(goto=tool_node)" as C4
+  state "ToolMessage stubs +\nAIMessage cancelado\nCommand(goto=END)" as C5
+  C1 --> C2 : usuário responde
+  C2 --> C3
+  C3 --> C4 : sim/confirmo/yes
+  C3 --> C5 : qualquer outra resposta
+}
+
+state "tool_node" as TN {
+  state "Executa tools MCP via stdio" as T1
+  state "Retorna ToolMessages" as T2
+  T1 --> T2
+}
+
+state "END" as END_STATE
+
+AN --> GN        : len(delete_expense calls) > 1\nbulk delete detectado
+AN --> CN        : tool_call é delete_expense\nou update_expense
+AN --> TN        : tool_calls seguros\n(record, query, summary, categories...)
+AN --> END_STATE : sem tool_calls → resposta final
+
+GN --> END_STATE
+
+TN --> AN : sempre (loop ReAct)
+
+note right of AN
+  AgentState:
+  messages: Annotated[list, add_messages]
+
+  AsyncSqliteSaver: persiste entre sessões
+  thread_id = "default" (fixo por instância)
+end note
+
+note right of CN
+  interrupt() usa o checkpointer:
+  estado salvo antes de pausar.
+  Retoma exatamente onde parou
+  via Command(resume=valor).
+
+  Patch in-place: novo AIMessage
+  com mesmo id → add_messages
+  substitui o original no estado.
+end note
+
+note right of GN
+  Intercepta antes do tool_node.
+  ToolMessage stubs garantem
+  consistência da chain de mensagens
+  para turnos futuros.
+end note
+
+@enduml
+
+
+@startuml Fluxo_HITL_Delete
+title MVP 2 — Fluxo HITL: Exclusão com interrupt()\n"apaga o almoço de ontem"
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam backgroundColor #FAFAFA
+skinparam participantBackgroundColor #EEF2FF
+skinparam participantBorderColor #6366F1
+skinparam sequenceArrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+skinparam noteBorderColor #D97706
+skinparam sequenceLifeLineBorderColor #6366F1
+
+actor       "Usuário"                          as U
+participant "main.py\n_invoke()"               as CLI
+participant "agent_node"                       as AG
+participant "OpenAI API"                       as OAI
+participant "tool_node"                        as TN
+participant "confirm_node\ninterrupt()"        as CN #D1FAE5
+participant "MCP Server"                       as MS
+database    "financas.db"                      as DB
+database    "checkpoints.db\n(AsyncSqliteSaver)" as CDB
+
+U   -> CLI : "apaga o almoço de ontem"
+CLI -> AG  : ainvoke({messages:[HumanMessage]}, config)
+AG  -> OAI : [SystemMessage + histórico trimado]
+OAI --> AG : tool_call: find_expense_candidates\n(keyword="almoço", expense_date="2026-05-11")
+
+AG  -> TN  : tool_calls
+TN  -> MS  : find_expense_candidates(...)
+MS  -> DB  : SELECT ... WHERE deleted_at IS NULL
+DB  --> MS : [{id:42, amount:55.90, description:"almoço",\ncategory:"Alimentação", date:"2026-05-11"}]
+MS  --> TN : {total_found:1, records:[...]}
+TN  --> AG : ToolMessage
+
+AG  -> OAI : [histórico + ToolMessage]
+OAI --> AG : tool_call: delete_expense\n(expense_id=42, confirmed=False)
+
+note over AG
+  should_call_tools detecta:
+  tool_call é delete_expense
+  → roteia para confirm_node
+end note
+
+AG  -> CN  : state com AIMessage(tool_calls)
+
+note over CN
+  _format_confirmation consulta DB:
+  "Confirme a exclusão:
+   ID #42 · R$ 55,90 · almoço ·
+   Alimentação · dinheiro · 2026-05-11
+   Tem certeza? (sim/não)"
+end note
+
+CN  -> CDB : salva estado\n(checkpoint antes do interrupt)
+CN  --> CLI : retorna result com\n__interrupt__[0].value = mensagem
+
+CLI --> U  : "Assistente: Confirme a exclusão:\n  ID #42 · R$ 55,90 · almoço..."
+U   -> CLI : "sim"
+
+CLI -> CN  : ainvoke(Command(resume="sim"), config)
+
+note over CN
+  interrupt() retorna "sim"
+  Patch AIMessage (mesmo id):
+  confirmed=False → confirmed=True
+  Command(update={messages:[new_ai]},
+          goto="tool_node")
+end note
+
+CN  -> TN  : AIMessage(confirmed=True) via Command
+TN  -> MS  : delete_expense(expense_id=42, confirmed=True)
+
+note over MS
+  confirmed=True → prossegue
+  UPDATE SET deleted_at = NOW()
+  INSERT INTO audit_log (snapshot)
+end note
+
+MS  -> DB  : UPDATE expenses\nSET deleted_at = CURRENT_TIMESTAMP\nWHERE id = 42
+DB  --> MS : OK
+MS  -> DB  : INSERT INTO audit_log\n(delete, 42, old_data_json)
+DB  --> MS : OK
+MS  --> TN : {deleted:True, expense_id:42, record:{...}}
+TN  --> AG : ToolMessage
+
+AG  -> OAI : [histórico + resultado]
+OAI --> AG : "✓ Registro #42 excluído:\nR$ 55,90 · almoço · 2026-05-11"
+AG  --> CLI : {messages:[..., AIMessage]}
+CLI --> U  : "✓ Registro #42 excluído..."
+
+@enduml
+
+
+@startuml Fluxo_Categorias_Dinamicas
+title MVP 2 — Fluxo: Categorias Dinâmicas\n"gastei 80 reais com veterinário"
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam backgroundColor #FAFAFA
+skinparam participantBackgroundColor #EEF2FF
+skinparam participantBorderColor #6366F1
+skinparam sequenceArrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+skinparam noteBorderColor #D97706
+
+actor       "Usuário"       as U
+participant "agent_node"    as AG
+participant "OpenAI API"    as OAI
+participant "tool_node"     as TN
+participant "MCP Server"    as MS
+database    "financas.db"   as DB
+
+U   -> AG  : "gastei 80 reais com veterinário"
+AG  -> OAI : [SystemMessage + HumanMessage]
+OAI --> AG : tool_call: list_categories()
+
+AG  -> TN
+TN  -> MS  : list_categories()
+MS  -> DB  : SELECT name FROM categories ORDER BY name
+DB  --> MS : [Alimentação, Educação, Lazer, Moradia,\nOutros, Saúde, Serviços, Tecnologia,\nTransporte, Vestuário]
+MS  --> TN : lista de categorias
+TN  --> AG : ToolMessage
+
+AG  -> OAI : [histórico + lista de categorias]
+
+note over OAI
+  Nenhuma categoria se encaixa
+  claramente em "veterinário".
+  Saúde é possível, mas o prompt
+  instrui a não usar Outros e
+  a perguntar sobre categorias novas.
+end note
+
+OAI --> AG : (resposta de texto — sem tool_call):\n"Nenhuma categoria parece adequada para\nveterinário. Deseja criar 'Saúde Animal'\nou prefere usar 'Saúde' da lista?"
+
+AG  --> U  : "Nenhuma categoria parece adequada..."
+U   -> AG  : "cria Saúde Animal"
+
+AG  -> OAI : [histórico]
+OAI --> AG : (resposta de texto):\n"Deseja criar a categoria 'Saúde Animal'? (sim/não)"
+
+AG  --> U  : "Deseja criar a categoria 'Saúde Animal'?"
+U   -> AG  : "sim"
+
+AG  -> OAI : [histórico]
+OAI --> AG : tool_call: create_category\n(name="Saúde Animal", confirmed=True)
+
+note over AG
+  HITL conversacional:
+  agent esperou confirmação explícita
+  antes de chamar create_category.
+end note
+
+AG  -> TN
+TN  -> MS  : create_category("Saúde Animal", confirmed=True)
+
+note over MS
+  _validate_category_name:
+  strip + title case → "Saúde Animal"
+  2 ≤ len ≤ 30 ✓
+  apenas letras/espaços/hífens ✓
+  duplicate check (LOWER) ✓
+end note
+
+MS  -> DB  : INSERT INTO categories\n(name="Saúde Animal", is_system=0)
+DB  --> MS : OK
+MS  --> TN : {created:True, name:"Saúde Animal"}
+TN  --> AG : ToolMessage
+
+AG  -> OAI : [histórico]
+OAI --> AG : tool_call: record_expense\n(amount=80.0, description="veterinário",\ncategory="Saúde Animal", ...)
+
+AG  -> TN
+TN  -> MS  : record_expense(...)
+
+note over MS
+  _get_valid_categories() consulta DB:
+  "Saúde Animal" agora está na lista ✓
+  INSERT INTO expenses
+end note
+
+MS  -> DB  : INSERT INTO expenses\n(80.0, "veterinário", "Saúde Animal", ...)
+DB  --> MS : id = 7
+MS  --> TN : {id:7, amount:80.0, ...}
+TN  --> AG : ToolMessage
+AG  --> U  : "✓ R$ 80,00 · Saúde Animal · dinheiro · hoje"
+
+note over DB
+  categories após operação:
+  is_system=1: 10 categorias originais
+  is_system=0: "Saúde Animal" (criada pelo usuário)
+end note
+
+@enduml
+
+
+@startuml Schema_Banco_MVP2
+title MVP 2 — Schema do Banco de Dados\nSQLite · financas.db + checkpoints.db
+
+skinparam backgroundColor #FAFAFA
+skinparam entityBackgroundColor #FEF9C3
+skinparam entityBorderColor #D97706
+skinparam noteBackgroundColor #F5F3FF
+skinparam noteBorderColor #7C3AED
+
+package "financas.db" as MAIN_DB {
+
+  entity "expenses" as EXP {
+    * id           : INTEGER   PK AUTOINCREMENT
+    --
+    * amount       : REAL      CHECK(> 0 AND < 100000)
+    * description  : TEXT
+    * category     : TEXT      REFERENCES categories(name)
+    * method       : TEXT      CHECK(in valid_methods)
+    * expense_date : DATE      DEFAULT CURRENT_DATE
+    * created_at   : TIMESTAMP DEFAULT NOW
+    * hash         : TEXT      UNIQUE  (SHA256 anti-dup)
+    + deleted_at   : TIMESTAMP NULL    (soft delete)
+  }
+
+  entity "categories" as CAT {
+    * id        : INTEGER   PK AUTOINCREMENT
+    --
+    * name      : TEXT      UNIQUE
+    * is_system : INTEGER   NOT NULL DEFAULT 0
+    * created_at: TIMESTAMP DEFAULT NOW
+  }
+
+  entity "audit_log" as AUDIT {
+    * id         : INTEGER   PK AUTOINCREMENT
+    --
+    * operation  : TEXT      CHECK(in 'delete','update')
+    * expense_id : INTEGER
+    * old_data   : TEXT      (JSON snapshot antes)
+    + new_data   : TEXT      (JSON snapshot depois, só update)
+    * created_at : TIMESTAMP DEFAULT NOW
+  }
+
+  entity "alembic_version" as ALB_V {
+    * version_num : TEXT  PK
+    --
+    (gerenciado pelo Alembic)
+  }
+
+}
+
+package "checkpoints.db" as CKP_DB #F0FDF4 {
+  entity "checkpoints\n(LangGraph interno)" as CKP {
+    thread_id, checkpoint_id, ...
+    (gerenciado pelo AsyncSqliteSaver)
+  }
+}
+
+EXP }|--|| CAT   : "category → name"
+EXP |o--o{ AUDIT : "expense_id"
+
+note right of EXP
+  deleted_at = NULL → ativo
+  deleted_at ≠ NULL → soft deleted
+  Toda query filtra: WHERE deleted_at IS NULL
+end note
+
+note right of CAT
+  is_system = 1: 10 categorias originais
+    (Alimentação, Transporte, Moradia,
+     Saúde, Lazer, Educação, Vestuário,
+     Tecnologia, Serviços, Outros)
+  is_system = 0: criadas pelo usuário
+    via create_category (HITL)
+end note
+
+note right of AUDIT
+  Imutável. Nunca exposto como MCP tool.
+  Permite recuperação: UPDATE expenses
+  SET deleted_at = NULL WHERE id = ?
+end note
+
+note bottom of ALB_V
+  Migration chain:
+  0001 → schema inicial (expenses + categories + audit_log)
+  0002 → ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0
+          UPDATE categories SET is_system = 1
+end note
+
+note right of CKP_DB
+  Separado de financas.db:
+  dados financeiros vs estado do agente.
+  thread_id = "default": conversa
+  persiste entre python main.py.
+  Deletar checkpoints.db = reset sessão.
+end note
+
+@enduml
+
+
+@startuml Defesa_em_Profundidade
+title MVP 2 — Guardrails: Defesa em Profundidade\n4 camadas de proteção para operações destrutivas
+
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+skinparam rectangleBorderColor #6366F1
+skinparam arrowColor #6366F1
+skinparam noteBackgroundColor #FEF9C3
+skinparam noteBorderColor #D97706
+
+rectangle "Usuário" as U #EEF2FF
+
+rectangle "LAYER 1 — System Prompt\n(instrução comportamental — mais fraco)" as L1 #FEF9C3 {
+  rectangle "✓ Proibição explícita de exclusões em massa\n   (10+ exemplos de frases bloqueadas)" as L1A
+  rectangle "✓ Proteção contra prompt injection\n   (recusa instruções que subvertam regras)" as L1B
+  rectangle "✓ Fluxo obrigatório: find_candidates → delete_expense\n   O sistema confirma automaticamente" as L1C
+}
+
+rectangle "LAYER 2 — LangGraph guardrail_node\n(interceptação arquitetural — forte)" as L2 #FECACA {
+  rectangle "✓ Detecta N > 1 delete_expense em um único turno\n   (parallel tool calls via OpenAI)" as L2A
+  rectangle "✓ Bloqueia ANTES do tool_node\n   Injeta stubs + mensagem de segurança → END" as L2B
+}
+
+rectangle "LAYER 3 — LangGraph confirm_node\n(interrupt() HITL — forte)" as L3 #D1FAE5 {
+  rectangle "✓ Intercepta TODA chamada a delete_expense / update_expense\n   independente do que o LLM passou" as L3A
+  rectangle "✓ interrupt(): pausa + aguarda confirmação humana\n   Estado checkpointado antes de pausar" as L3B
+  rectangle "✓ Patch in-place: confirmed=True só após resposta 'sim'\n   Command(goto=tool_node ou END)" as L3C
+}
+
+rectangle "LAYER 4 — MCP Server\n(validação técnica — última linha ativa)" as L4 #F5F3FF {
+  rectangle "✓ delete_expense aceita apenas expense_id:int\n   (não aceita filtros, listas ou ranges)" as L4A
+  rectangle "✓ confirmed=False → rejeita sem tocar no banco\n   (backstop se alguém chamar diretamente)" as L4B
+  rectangle "✓ Valida existência do registro antes de operar\n   Soft delete + INSERT em audit_log" as L4C
+}
+
+rectangle "LAYER 5 — SQLite\n(defesa passiva — recuperação)" as L5 #FEE2E2 {
+  rectangle "✓ soft delete: deleted_at TIMESTAMP NULL\n   Dado nunca destruído fisicamente" as L5A
+  rectangle "✓ audit_log: snapshot before/after toda mutação\n   Recuperação: UPDATE SET deleted_at = NULL" as L5B
+}
+
+U --> L1 : pedido do usuário
+L1 -down-> L2 : se L1 for ignorado
+L2 -down-> L3 : se não for bulk delete
+L3 -down-> L4 : após confirmação humana
+L4 -down-> L5 : sempre
+
+note right of L2
+  Incidente de 2026-05-12:
+  "apaga todos os gastos do mês"
+  → LLM gerou parallel tool_calls
+  → banco zerado.
+  Corrigido pelo guardrail_node.
+end note
+
+note right of L3
+  A única forma de um delete/update
+  chegar ao MCP server é passando
+  pelo interrupt() e sendo confirmado
+  pelo usuário naquele exato momento.
+end note
+
+note bottom of L5
+  Mesmo que todas as camadas anteriores
+  falhem, o soft delete garante
+  que os dados podem ser recuperados
+  manualmente via SQLite CLI.
+end note
+
+@enduml
