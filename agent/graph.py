@@ -1,8 +1,7 @@
 from typing import Annotated
 
-from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage, trim_messages
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -22,7 +21,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
 
 
-def build_graph(tools: list):
+def build_graph(tools: list, checkpointer=None):
     llm = ChatOpenAI(
         model=settings.openai_model,
         temperature=0,
@@ -32,7 +31,16 @@ def build_graph(tools: list):
     system_prompt = get_system_prompt()
 
     async def agent_node(state: AgentState) -> dict:
-        messages = [SystemMessage(content=system_prompt)] + state["messages"]
+        # Trim history before sending to the LLM — full history stays in the checkpointer
+        trimmed = trim_messages(
+            state["messages"],
+            max_tokens=settings.max_context_messages,
+            token_counter=lambda msgs: len(msgs),
+            strategy="last",
+            include_system=False,
+            start_on="human",
+        )
+        messages = [SystemMessage(content=system_prompt)] + trimmed
         response = await llm_with_tools.ainvoke(messages)
         return {"messages": [response]}
 
@@ -71,4 +79,4 @@ def build_graph(tools: list):
     graph.add_edge("tool_node", "agent_node")
     graph.add_edge("guardrail_node", END)
 
-    return graph.compile(checkpointer=MemorySaver())
+    return graph.compile(checkpointer=checkpointer)

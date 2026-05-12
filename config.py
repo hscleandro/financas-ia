@@ -7,7 +7,9 @@ class Settings(BaseSettings):
     openai_api_key: str
     openai_model: str = "gpt-4o-mini"
     db_path: str = "./financas.db"
+    checkpoints_path: str = "./checkpoints.db"
     max_expense_amount: float = 100_000.0
+    max_context_messages: int = 40
 
     langchain_tracing_v2: bool = False
     langchain_api_key: str = ""
