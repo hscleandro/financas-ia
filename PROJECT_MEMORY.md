@@ -538,6 +538,22 @@ O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o con
   - `test_bulk_delete_prompt_refusal` — testa frases proibidas no system prompt (via mock do LLM)
   - `test_delete_without_confirmed_blocked` — confirma que MCP server rejeita confirmed=False
 
+### DA-015: Formas de pagamento dinâmicas — nunca inferir sem evidência explícita
+- **Problema identificado:** O sistema assumia `method = "dinheiro"` quando o usuário não informava a forma de pagamento. Isso gera registros imprecisos no histórico financeiro.
+- **Decisão:** Formas de pagamento seguem o mesmo padrão das categorias dinâmicas (DA introduzida no MVP 2):
+  - Nova tabela `payment_methods` com `is_system` — espelho exato de `categories`
+  - 5 métodos originais marcados como `is_system=1`; novos criados pelo usuário com `is_system=0`
+  - Validação migra do `CHECK` constraint hardcoded no SQLite para consulta dinâmica à tabela
+- **Regra comportamental:** Agente NUNCA assume a forma de pagamento. Se ausente, pergunta ao usuário com lista numerada (incluindo "Outra"). Se o usuário responder "Outra" ou método desconhecido → HITL de criação (mesmo protocolo de `create_category`)
+- **Regra arquitetural:** Criação de método de pagamento é HITL conversacional (igual a categorias) — não usa `interrupt()` porque não é operação destrutiva
+- **Implementação planejada:**
+  - Alembic 0003: cria `payment_methods` + seed + recria `expenses` sem o `CHECK(method IN (...))` — SQLite não tem DROP CONSTRAINT, então é necessário `CREATE new → INSERT SELECT → DROP → RENAME`
+  - Nova tool `list_payment_methods()` e `create_payment_method(name, confirmed)`
+  - Remove `VALID_METHODS` hardcoded e `PaymentMethod = Literal[...]`
+  - System prompt: remove default "dinheiro"; adiciona regra de perguntar sempre + protocolo HITL para método novo
+  - LangGraph: nenhuma mudança no grafo
+- **Reaproveitamento:** `create_payment_method` tem assinatura e guardrails idênticos a `create_category` (strip, title case, 2–30 chars, unicodedata, duplicate check case-insensitive, `confirmed` gate)
+
 ### DA-013: Escopo do MVP 2 (análise crítica)
 - **Inclui:** SqliteSaver + trimming, interrupt() HITL, pytest, Alembic, retry OpenAI
 - **Exclui deliberadamente:** multi-agente, structlog, output guardrails, service layer, cache, feature flags
