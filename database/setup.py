@@ -11,6 +11,8 @@ CATEGORIES = [
     "Educação", "Vestuário", "Tecnologia", "Serviços", "Outros",
 ]
 
+PAYMENT_METHODS = ["dinheiro", "crédito", "débito", "pix", "transferência"]
+
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(settings.db_path)
@@ -24,6 +26,14 @@ def setup_database() -> None:
             CREATE TABLE IF NOT EXISTS categories (
                 id          INTEGER   PRIMARY KEY AUTOINCREMENT,
                 name        TEXT      NOT NULL UNIQUE,
+                is_system   INTEGER   NOT NULL DEFAULT 0,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS payment_methods (
+                id          INTEGER   PRIMARY KEY AUTOINCREMENT,
+                name        TEXT      NOT NULL UNIQUE,
+                is_system   INTEGER   NOT NULL DEFAULT 0,
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -32,8 +42,7 @@ def setup_database() -> None:
                 amount       REAL      NOT NULL CHECK(amount > 0 AND amount < 100000),
                 description  TEXT      NOT NULL,
                 category     TEXT      NOT NULL REFERENCES categories(name),
-                method       TEXT      NOT NULL DEFAULT 'dinheiro'
-                             CHECK(method IN ('dinheiro','crédito','débito','pix','transferência')),
+                method       TEXT      NOT NULL DEFAULT 'dinheiro',
                 expense_date DATE      NOT NULL DEFAULT CURRENT_DATE,
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 hash         TEXT      NOT NULL UNIQUE,
@@ -51,7 +60,13 @@ def setup_database() -> None:
         """)
 
         for name in CATEGORIES:
-            conn.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (name,))
+            conn.execute(
+                "INSERT OR IGNORE INTO categories (name, is_system) VALUES (?, 1)", (name,)
+            )
+        for name in PAYMENT_METHODS:
+            conn.execute(
+                "INSERT OR IGNORE INTO payment_methods (name, is_system) VALUES (?, 1)", (name,)
+            )
         conn.commit()
 
 

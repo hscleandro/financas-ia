@@ -20,14 +20,17 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP("financas-mcp")
 
-VALID_METHODS = {"dinheiro", "crédito", "débito", "pix", "transferência"}
-
-
 # ─── Utilitários internos ────────────────────────────────────────────────────
 
 def _get_valid_categories() -> set[str]:
     with get_connection() as conn:
         rows = conn.execute("SELECT name FROM categories").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _get_valid_methods() -> set[str]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT name FROM payment_methods").fetchall()
     return {row["name"] for row in rows}
 
 
@@ -40,6 +43,18 @@ def _validate_category_name(name: str) -> tuple[str, str | None]:
         return clean, "Nome da categoria não pode exceder 30 caracteres."
     if not all(c == " " or c == "-" or unicodedata.category(c).startswith("L") for c in clean):
         return clean, "Nome da categoria deve conter apenas letras, espaços e hífens."
+    return clean, None
+
+
+def _validate_method_name(name: str) -> tuple[str, str | None]:
+    """Normaliza e valida um nome de método de pagamento. Retorna (nome_normalizado, erro_ou_None)."""
+    clean = name.strip().lower()
+    if len(clean) < 2:
+        return clean, "Nome do método deve ter pelo menos 2 caracteres."
+    if len(clean) > 30:
+        return clean, "Nome do método não pode exceder 30 caracteres."
+    if not all(c == " " or c == "-" or unicodedata.category(c).startswith("L") for c in clean):
+        return clean, "Nome do método deve conter apenas letras, espaços e hífens."
     return clean, None
 
 
@@ -68,7 +83,7 @@ def record_expense(
     amount: float,
     description: str,
     category: str,
-    method: str = "dinheiro",
+    method: str,
     expense_date: Optional[str] = None,
 ) -> dict:
     """Registra um gasto no banco de dados financeiro pessoal.
@@ -77,13 +92,20 @@ def record_expense(
         amount: Valor do gasto em reais (ex: 55.90)
         description: Descrição do gasto (ex: "almoço no restaurante")
         category: Categoria do gasto (deve ser uma das categorias válidas)
-        method: Método de pagamento (dinheiro, crédito, débito, pix, transferência)
+        method: Método de pagamento — use list_payment_methods para ver os disponíveis
         expense_date: Data do gasto no formato YYYY-MM-DD (padrão: hoje)
     """
     valid_categories = _get_valid_categories()
     if category not in valid_categories:
         return {
             "error": f"Categoria inválida: '{category}'. Use list_categories para ver as disponíveis.",
+            "tipo": "invalido",
+        }
+
+    valid_methods = _get_valid_methods()
+    if method not in valid_methods:
+        return {
+            "error": f"Método inválido: '{method}'. Use list_payment_methods para ver os disponíveis.",
             "tipo": "invalido",
         }
 
@@ -237,6 +259,49 @@ def list_categories() -> list[str]:
     with get_connection() as conn:
         rows = conn.execute("SELECT name FROM categories ORDER BY name").fetchall()
     return [row["name"] for row in rows]
+
+
+@mcp.tool()
+def list_payment_methods() -> list[str]:
+    """Retorna a lista de métodos de pagamento disponíveis."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT name FROM payment_methods ORDER BY name").fetchall()
+    return [row["name"] for row in rows]
+
+
+@mcp.tool()
+def create_payment_method(name: str, confirmed: bool) -> dict:
+    """Cria um novo método de pagamento definido pelo usuário.
+
+    ATENÇÃO: confirmed=True somente após confirmação explícita do usuário nessa mensagem.
+    Métodos do sistema (is_system=1) não podem ser substituídos.
+
+    Args:
+        name: Nome do novo método (será normalizado para lowercase)
+        confirmed: True apenas se o usuário confirmou explicitamente agora
+    """
+    if not confirmed:
+        return {
+            "error": "Criação de método requer confirmed=True. Mostre o nome ao usuário e aguarde confirmação.",
+            "tipo": "nao_confirmado",
+        }
+
+    clean, error = _validate_method_name(name)
+    if error:
+        return {"error": error, "tipo": "invalido"}
+
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT name FROM payment_methods WHERE LOWER(name) = LOWER(?)", (clean,)
+        ).fetchone()
+        if existing:
+            return {"error": f"Método '{existing['name']}' já existe.", "tipo": "duplicata"}
+
+        conn.execute("INSERT INTO payment_methods (name, is_system) VALUES (?, 0)", (clean,))
+        conn.commit()
+
+    logger.info("Método de pagamento criado pelo usuário: %s", clean)
+    return {"created": True, "name": clean}
 
 
 @mcp.tool()
@@ -431,8 +496,11 @@ def update_expense(
         changes["category"] = category
 
     if method is not None:
-        if method not in VALID_METHODS:
-            return {"error": f"Método inválido: '{method}'. Use: {', '.join(sorted(VALID_METHODS))}.", "tipo": "invalido"}
+        if method not in _get_valid_methods():
+            return {
+                "error": f"Método inválido: '{method}'. Use list_payment_methods para ver os disponíveis.",
+                "tipo": "invalido",
+            }
         changes["method"] = method
 
     if expense_date is not None:

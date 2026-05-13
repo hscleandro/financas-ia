@@ -1,15 +1,13 @@
 from pydantic import BaseModel, field_validator
 from datetime import date
-from typing import Literal, Optional
-
-PaymentMethod = Literal["dinheiro", "crédito", "débito", "pix", "transferência"]
+from typing import Optional
 
 
 class ExpenseCreate(BaseModel):
     amount: float
     description: str
     category: str
-    method: PaymentMethod = "dinheiro"
+    method: str
     expense_date: Optional[date] = None
 
     @field_validator("amount")
