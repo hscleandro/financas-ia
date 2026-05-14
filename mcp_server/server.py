@@ -165,6 +165,7 @@ def query_expenses(
     end_date: Optional[str] = None,
     category: Optional[str] = None,
     method: Optional[str] = None,
+    keyword: Optional[str] = None,
 ) -> list[dict]:
     """Consulta gastos ativos com filtros opcionais.
 
@@ -173,6 +174,7 @@ def query_expenses(
         end_date: Data final no formato YYYY-MM-DD
         category: Filtrar por categoria específica
         method: Filtrar por método de pagamento
+        keyword: Palavra-chave para busca textual na descrição
     """
     query = (
         "SELECT id, amount, description, category, method, expense_date, created_at "
@@ -198,7 +200,17 @@ def query_expenses(
     with get_connection() as conn:
         rows = conn.execute(query, params).fetchall()
 
-    return [dict(row) for row in rows]
+    results = [dict(row) for row in rows]
+
+    # Filtragem em Python para suporte correto a Unicode/acentos
+    if keyword:
+        normalized_kw = _normalize_description(keyword)
+        results = [
+            r for r in results
+            if normalized_kw in _normalize_description(r["description"])
+        ]
+
+    return results
 
 
 @mcp.tool()

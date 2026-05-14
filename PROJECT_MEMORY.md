@@ -3,8 +3,8 @@
 > Arquivo de memória persistente do projeto. Atualizado ao longo do desenvolvimento.
 > Use este arquivo para retomar o contexto em novas sessões.
 >
-> **Última atualização:** 2026-05-12
-> **Status atual:** MVP 2 em andamento — guardrails de segurança (DA-014)
+> **Última atualização:** 2026-05-13
+> **Status atual:** MVP 2 em andamento — pendente: DA-016 (busca textual), testes automatizados (DT-007) e retry OpenAI (DT-006)
 
 ---
 
@@ -76,22 +76,27 @@ LANGCHAIN_PROJECT=financas-ia-mvp1
 
 ---
 
-## Arquitetura Atual (MVP 1)
+## Arquitetura Atual (MVP 2)
 
 ### Padrão arquitetural
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                      main.py (CLI)                      │
+│   AsyncSqliteSaver (checkpoints.db) — sessão persiste   │
 └────────────────────────┬────────────────────────────────┘
-                         │ ainvoke()
+                         │ ainvoke() / Command(resume=...)
 ┌────────────────────────▼────────────────────────────────┐
 │                  agent/graph.py                         │
 │              LangGraph StateGraph                       │
 │                                                         │
-│  START → [agent_node] ⇄ [tool_node] → END              │
-│              │                │                         │
-│           LLM call       executa MCP                    │
-│         (OpenAI)           tools                        │
+│  START → [agent_node]                                   │
+│               │                                         │
+│         should_call_tools                               │
+│          ├──→ [guardrail_node] → END   (bulk delete)    │
+│          ├──→ [confirm_node]           (destrutivo)     │
+│          │       └─ interrupt() HITL                    │
+│          │       └─ Command(goto=tool_node|END)         │
+│          └──→ [tool_node] → [agent_node] → ...         │
 └────────────────────────┬────────────────────────────────┘
                          │ stdio subprocess
 ┌────────────────────────▼────────────────────────────────┐
@@ -99,12 +104,14 @@ LANGCHAIN_PROJECT=financas-ia-mvp1
 │                 FastMCP (stdio)                         │
 │                                                         │
 │  record_expense | query_expenses | get_summary          │
-│  list_categories                                        │
+│  list_categories | create_category                      │
+│  list_payment_methods | create_payment_method           │
+│  find_expense_candidates | delete_expense | update_expense │
 └────────────────────────┬────────────────────────────────┘
                          │ sqlite3
 ┌────────────────────────▼────────────────────────────────┐
 │                   financas.db (SQLite)                  │
-│        tabelas: expenses, categories                    │
+│  expenses · categories · payment_methods · audit_log    │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -112,14 +119,15 @@ LANGCHAIN_PROJECT=financas-ia-mvp1
 
 | Camada | Arquivo | Responsabilidade |
 |---|---|---|
-| Entrada | `main.py` | Loop CLI, thread_id de sessão |
-| Orquestração | `agent/graph.py` | StateGraph, MemorySaver, bind_tools |
-| Inteligência | `agent/prompts.py` | System prompt, instruções de extração |
-| Validação lógica | `agent/guardrails.py` | Regras de negócio pré-tool |
-| Protocolo | `mcp_server/server.py` | Tools MCP, validação Pydantic, hash |
-| Dados | `database/setup.py` | Schema SQLite, seed de categorias |
-| Modelos | `models/schemas.py` | Pydantic schemas compartilhados |
-| Config | `config.py` | Settings centralizadas |
+| Entrada | `main.py` | Loop CLI, AsyncSqliteSaver, _invoke() com loop de interrupt |
+| Orquestração | `agent/graph.py` | StateGraph, guardrail_node, confirm_node, trim_messages |
+| Inteligência | `agent/prompts.py` | System prompt, instruções de extração, HITL rules |
+| Protocolo | `mcp_server/server.py` | 10 tools MCP, validação, hash, soft delete, audit_log |
+| Dados | `database/setup.py` | Schema SQLite, seed categorias e métodos |
+| Modelos | `models/schemas.py` | Pydantic: ExpenseCreate (amount, date), ExpenseRecord |
+| Config | `config.py` | Settings: OpenAI, db_path, checkpoints_path, max_context_messages |
+| Migrations | `migrations/versions/` | Alembic — autoridade final sobre schema |
+| Diagramas | `diagrams/` | PlantUML — arquitetura MVP 2 + fluxo excluir gasto |
 
 **Regra de ouro:** O MCP Server é um banco de dados inteligente (sem lógica de negócio complexa). O LangGraph é o cérebro (toda lógica vive aqui). Não inverter essa relação.
 
@@ -134,71 +142,99 @@ financas-ia/
 ├── .gitignore
 ├── requirements.txt
 ├── PROJECT_MEMORY.md           # Este arquivo
+├── alembic.ini                 # Configuração Alembic
 │
 ├── config.py                   # Settings centralizadas (pydantic-settings)
 │
 ├── database/
 │   ├── __init__.py
-│   └── setup.py                # Cria banco, tabelas, seed categorias
+│   └── setup.py                # Schema SQLite + seed categorias e payment_methods
 │
 ├── models/
 │   ├── __init__.py
-│   └── schemas.py              # Pydantic: ExpenseCreate, ExpenseRecord, Summary
+│   └── schemas.py              # Pydantic: ExpenseCreate (validação amount + date)
 │
 ├── mcp_server/
 │   ├── __init__.py
-│   └── server.py               # FastMCP (stdio) — 4 tools
+│   └── server.py               # FastMCP (stdio) — 10 tools
 │
 ├── agent/
 │   ├── __init__.py
-│   ├── prompts.py              # System prompt
-│   ├── guardrails.py           # Validações de negócio
-│   └── graph.py                # LangGraph StateGraph
+│   ├── prompts.py              # System prompt (HITL rules, guardrails, categorias, métodos)
+│   └── graph.py                # LangGraph — 4 nós: agent, tool, guardrail, confirm
 │
-└── main.py                     # Entry point CLI
+├── migrations/
+│   ├── env.py                  # Alembic env (usa config.py para db_path)
+│   ├── script.py.mako
+│   └── versions/
+│       ├── 0001_initial_schema.py
+│       ├── 0002_add_is_system_to_categories.py
+│       └── 0003_add_payment_methods.py
+│
+├── diagrams/
+│   ├── arquitetura_mvp2.puml   # 6 diagramas PlantUML — arquitetura geral MVP 2
+│   └── atividades_excluir_gasto.puml  # Diagrama de atividades — caso de uso delete
+│
+└── main.py                     # Entry point CLI — AsyncSqliteSaver, _invoke() com interrupt loop
 ```
 
 ---
 
 ## Banco de Dados
 
-### Schema (SQLite)
+### Schema (SQLite — estado atual após migrations 0001–0003)
 
 ```sql
--- Categorias fixas (seed imutável via agente)
 CREATE TABLE categories (
     id          INTEGER   PRIMARY KEY AUTOINCREMENT,
     name        TEXT      NOT NULL UNIQUE,
+    is_system   INTEGER   NOT NULL DEFAULT 0,  -- 1=sistema, 0=usuário
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Gastos (append-only — sem UPDATE/DELETE via agente)
+CREATE TABLE payment_methods (
+    id          INTEGER   PRIMARY KEY AUTOINCREMENT,
+    name        TEXT      NOT NULL UNIQUE,
+    is_system   INTEGER   NOT NULL DEFAULT 0,  -- 1=sistema, 0=usuário
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE expenses (
     id           INTEGER   PRIMARY KEY AUTOINCREMENT,
     amount       REAL      NOT NULL CHECK(amount > 0 AND amount < 100000),
     description  TEXT      NOT NULL,
     category     TEXT      NOT NULL REFERENCES categories(name),
-    method       TEXT      NOT NULL DEFAULT 'dinheiro'
-                           CHECK(method IN ('dinheiro','crédito','débito','pix','transferência')),
+    method       TEXT      NOT NULL DEFAULT 'dinheiro',  -- validado via payment_methods
     expense_date DATE      NOT NULL DEFAULT CURRENT_DATE,
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    hash         TEXT      NOT NULL UNIQUE
+    hash         TEXT      NOT NULL UNIQUE,
+    deleted_at   TIMESTAMP DEFAULT NULL  -- soft delete
+);
+
+CREATE TABLE audit_log (
+    id          INTEGER   PRIMARY KEY AUTOINCREMENT,
+    operation   TEXT      NOT NULL CHECK(operation IN ('delete', 'update')),
+    expense_id  INTEGER   NOT NULL,
+    old_data    TEXT      NOT NULL,  -- JSON snapshot antes da operação
+    new_data    TEXT      DEFAULT NULL,  -- JSON snapshot depois (só para update)
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
-### Categorias (seed)
+### Seeds
 ```
-Alimentação | Transporte | Moradia | Saúde | Lazer
-Educação | Vestuário | Tecnologia | Serviços | Outros
+Categorias (is_system=1): Alimentação | Transporte | Moradia | Saúde | Lazer
+                          Educação | Vestuário | Tecnologia | Serviços | Outros
+Métodos (is_system=1):    dinheiro | crédito | débito | pix | transferência
 ```
 
 ### Decisões de design
-- `category` é `TEXT REFERENCES` (não INTEGER FK) → queries sem JOIN, mais legível
+- `category` e `method` são `TEXT` (não FK integer) → queries sem JOIN, mais legível
 - `hash UNIQUE` → banco rejeita duplicata automaticamente, zero lógica extra
-- Sem tabela `users` no MVP 1 (single-user por design)
-- Sem tabela `income` no MVP 1 (scope control)
-- Sem migrations no MVP 1 — só `CREATE TABLE IF NOT EXISTS`
-  - Alembic entra no MVP 2+ quando o schema precisar evoluir
+- `is_system=1` protege seeds — user não pode sobrescrever via agente
+- `CHECK(method IN (...))` removido em 0003 — validação dinâmica via `payment_methods`
+- `audit_log` nunca exposto como MCP tool — imutável, só para rastreabilidade
+- Alembic é autoridade final sobre schema (main.py chama `upgrade head` no startup)
 
 ---
 
@@ -229,26 +265,38 @@ Educação | Vestuário | Tecnologia | Serviços | Outros
 - **Input:** nenhum
 - **Output:** lista de strings com os nomes
 
-### `find_expense_candidates` *(a implementar)*
+### `list_payment_methods`
+- **Operação:** SELECT all payment_methods
+- **Input:** nenhum
+- **Output:** lista de strings com os nomes
+
+### `create_payment_method`
+- **Operação:** INSERT em payment_methods (is_system=0)
+- **Input:** name (str), confirmed (bool)
+- **Lógica:** rejeita `confirmed=False`; normaliza lowercase; valida 2–30 chars, só letras/espaços/hífens; verifica duplicata case-insensitive
+- **Output:** `{created: True, name}` ou `{error, tipo}`
+
+### `find_expense_candidates`
 - **Operação:** SELECT com lógica de "data mais recente"
 - **Input:** keyword, expense_date? (YYYY-MM-DD, opcional)
 - **Lógica interna:**
-  - Com `expense_date`: `WHERE description LIKE '%keyword%' AND expense_date = ?`
-  - Sem `expense_date`: primeiro `MAX(expense_date)` para o keyword, depois filtra por essa data
-  - Normaliza keyword: lowercase + remove acentos
+  - Filtragem em Python com unicodedata (NFD, remove acentos) — suporte correto a Unicode
+  - Com `expense_date`: filtra por data exata informada
+  - Sem `expense_date`: `MAX(expense_date)` entre os registros com o keyword
+  - Só retorna registros `WHERE deleted_at IS NULL`
 - **Output:** `{keyword, date_searched, total_found, records[]}`
 
-### `delete_expense` *(a implementar)*
-- **Operação:** Soft delete — `UPDATE SET deleted_at = NOW()`
+### `delete_expense`
+- **Operação:** Soft delete — `UPDATE SET deleted_at = CURRENT_TIMESTAMP`
 - **Input:** expense_id (int), confirmed (bool)
-- **Lógica:** rejeita se `confirmed=False`; valida existência; registra em `audit_log`
-- **Output:** `{deleted, expense_id, record}` ou `{error, tipo}`
+- **Lógica:** rejeita `confirmed=False`; busca registro ativo; grava JSON snapshot em `audit_log`; retorna registro deletado
+- **Output:** `{deleted: True, expense_id, record}` ou `{error, tipo}`
 
-### `update_expense` *(a implementar)*
+### `update_expense`
 - **Operação:** UPDATE parcial com recálculo de hash
 - **Input:** expense_id, confirmed, + campos opcionais (amount, description, category, method, expense_date)
-- **Lógica:** rejeita se `confirmed=False`; recalcula hash se amount/description/date mudar; registra before/after em `audit_log`
-- **Output:** `{updated, expense_id, old, new}` ou `{error, tipo}`
+- **Lógica:** rejeita `confirmed=False`; recalcula hash se amount/description/date mudar; registra before/after em `audit_log`; valida category e method contra tabelas dinâmicas
+- **Output:** `{updated: True, expense_id, old, new}` ou `{error, tipo}`
 
 ### O que deliberadamente NÃO existe no servidor MCP
 - `delete_by_category`, `delete_by_period`, `delete_all` — exclusão em massa impossível por design
@@ -260,37 +308,37 @@ Educação | Vestuário | Tecnologia | Serviços | Outros
 
 ## Fluxo LangGraph
 
-### Grafo
+### Grafo (MVP 2)
 ```
-START → agent_node ─[tool_call seguro]──→ tool_node → agent_node → ...
-                  ↘[bulk delete detectado]→ guardrail_node → END
-                  ↘[resposta final]────────→ END
+START → agent_node
+           │
+     should_call_tools (condicional)
+      ├── len(delete_expense) > 1  → guardrail_node → END
+      ├── any tool in DESTRUCTIVE_TOOLS → confirm_node
+      │       └── interrupt() HITL
+      │           ├── confirmado → Command(update messages, goto=tool_node)
+      │           └── cancelado → Command(stubs + cancel msg, goto=END)
+      ├── tool_calls presentes (seguro) → tool_node → agent_node
+      └── sem tool_calls → END
 ```
 
 ### Estado
 ```python
 class AgentState(TypedDict):
-    messages: Annotated[List[AnyMessage], add_messages]
+    messages: Annotated[list[AnyMessage], add_messages]
 ```
 
 ### Nós
-- **`agent_node`:** invoca LLM com system_prompt + histórico de mensagens
-- **`tool_node`:** executa tools MCP via `ToolNode(tools=tools)`
-- **`guardrail_node`:** intercepta bulk delete; injeta stubs + mensagem de segurança
+- **`agent_node`:** `trim_messages` (max 40, list-level lambda) + `[SystemMessage] + trimmed` → `ainvoke LLM`
+- **`tool_node`:** `ToolNode(tools=tools)` — executa tools MCP
+- **`guardrail_node`:** detecta múltiplos `delete_expense` em paralelo; injeta ToolMessage stubs + AIMessage de bloqueio
+- **`confirm_node`:** `interrupt()` síncrono — pausa o grafo; aguarda `Command(resume=resposta)` do usuário; patcha AIMessage com `confirmed=True` se confirmado; `add_messages` reducer substitui a mensagem pelo mesmo `id`
 
-### Arestas
-- `START → agent_node` (sempre)
-- `agent_node → guardrail_node` (se >1 delete_expense na mesma resposta)
-- `agent_node → tool_node` (se tool_calls presente e seguro)
-- `agent_node → END` (se LLM gerou resposta final)
-- `tool_node → agent_node` (sempre — retorna resultado para o LLM decidir próximo passo)
-- `guardrail_node → END` (após emitir mensagem de segurança)
-
-### Memória
-- `MemorySaver()` in-memory
-- `thread_id` gerado por sessão em `main.py` (ex: UUID ou timestamp)
-- Contexto persiste durante a sessão, não entre sessões
-- **Limitação MVP 1:** memória se perde ao reiniciar o programa
+### Checkpointer / Memória
+- `AsyncSqliteSaver.from_conn_string(settings.checkpoints_path)` → `checkpoints.db`
+- `thread_id = "default"` — sessão única, contexto persiste entre reinicializações
+- `trim_messages`: `max_tokens=40`, `strategy="last"`, `token_counter=lambda msgs: len(msgs)` (list-level — IMPORTANTE: lambda por msg retorna todos)
+- `include_system=False`, `start_on="human"` — SystemMessage re-injetado a cada turno
 
 ### MCP Transport
 - **`stdio`** — servidor é subprocesso do cliente
@@ -354,9 +402,18 @@ Usuário
 ✓ audit_log nunca exposto como MCP tool
 ```
 
-### O que NÃO existe nos guardrails do MVP 2 ainda
-- Human-in-the-Loop real com `interrupt()` → próxima etapa do MVP 2
-  - Motivo: requer checkpointer externo (SqliteSaver), não MemorySaver
+### Layer 3 — confirm_node interrupt() HITL (MVP 2 — implementado)
+```
+✓ Toda operação destrutiva (delete_expense, update_expense) passa por confirm_node
+✓ interrupt() pausa o grafo — estado salvo no AsyncSqliteSaver (checkpoints.db)
+✓ Mostra ao usuário: ID, valor, descrição, categoria, método, data
+✓ Só retoma via Command(resume=resposta)
+✓ Confirmações válidas: "sim", "confirmo", "yes", "pode", "confirmar"
+✓ Cancelamento: injeta stubs + mensagem "Operação cancelada."
+✓ Patch de confirmed=True: AIMessage recriada com mesmo id → add_messages faz replace
+```
+
+### O que NÃO existe nos guardrails ainda
 - Rate limiting → MVP 3+
 - Teste automatizado de guardrails → DT-007 (próxima prioridade)
 
@@ -381,15 +438,15 @@ O `MultiServerMCPClient` gerencia o ciclo de vida do subprocesso. O servidor é 
 
 ## Agentes
 
-### MVP 1 — Agente Único ReAct
+### MVP 2 — Agente Único ReAct (atual)
 - **Nome:** Assistente Financeiro Pessoal
 - **Modelo:** gpt-4o-mini (configurável via `OPENAI_MODEL`)
 - **Tipo:** ReAct (Reasoning + Acting) via LangGraph
-- **Tools disponíveis:** 4 tools MCP (record, query, summary, categories)
-- **Memória:** MemorySaver in-memory (por sessão)
-- **Prompt:** ver seção Convenções do Projeto
+- **Tools disponíveis:** 10 tools MCP
+- **Memória:** AsyncSqliteSaver (checkpoints.db) — persiste entre sessões
+- **Guardrails:** guardrail_node (bulk delete) + confirm_node (interrupt HITL)
 
-### Agentes futuros (MVP 2+)
+### Agentes futuros (MVP 3+)
 - Agente Extrator de Entidades (especialista em parsing de linguagem natural)
 - Agente Analista Financeiro (especialista em consultas e insights)
 - Roteador (direciona para o agente correto)
@@ -427,20 +484,19 @@ Nenhum código de instrumentação necessário. Ativado via env vars.
 ## Estratégia de Memória
 
 ### MVP 1
-- **Memória de conversa:** `MemorySaver` in-memory do LangGraph
-- **Thread:** um por sessão CLI (gerado em `main.py`)
-- **Contexto:** o histórico completo de mensagens da sessão é enviado ao LLM em cada turno
-- **Limitação:** memória é perdida ao encerrar `main.py`
+- `MemorySaver` in-memory — contexto perdido ao reiniciar
 
-### Problema: crescimento de contexto
-O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o contexto cresce e aumenta custo. No MVP 1, aceitamos essa limitação. Soluções para MVPs futuros:
-- Summarização periódica da conversa
-- Memória de longo prazo com SQLite (já existe o banco!)
-- LangGraph `SqliteSaver` para persistência entre sessões
+### MVP 2 (implementado)
+- `AsyncSqliteSaver` → `checkpoints.db` (arquivo separado de `financas.db`)
+- `thread_id = "default"` fixo — única sessão, histórico acumulado entre execuções
+- `trim_messages(max_tokens=40, strategy="last")` evita contexto crescente
+  - `token_counter=lambda msgs: len(msgs)` — conta mensagens, não tokens
+  - `start_on="human"` garante que o contexto sempre começa por mensagem humana
+- Implementação: `main.py:71` — `async with AsyncSqliteSaver.from_conn_string(...) as checkpointer`
 
-### MVP 2+ — memória persistente
-- Trocar `MemorySaver` por `SqliteSaver` (LangGraph built-in)
-- Usar o mesmo `financas.db` ou um arquivo separado de checkpoints
+### MVP 3+ (planejado)
+- Summarização periódica em vez de truncagem simples
+- Memória semântica com embeddings (busca por contexto relevante)
 
 ---
 
@@ -546,13 +602,14 @@ O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o con
   - Validação migra do `CHECK` constraint hardcoded no SQLite para consulta dinâmica à tabela
 - **Regra comportamental:** Agente NUNCA assume a forma de pagamento. Se ausente, pergunta ao usuário com lista numerada (incluindo "Outra"). Se o usuário responder "Outra" ou método desconhecido → HITL de criação (mesmo protocolo de `create_category`)
 - **Regra arquitetural:** Criação de método de pagamento é HITL conversacional (igual a categorias) — não usa `interrupt()` porque não é operação destrutiva
-- **Implementação planejada:**
-  - Alembic 0003: cria `payment_methods` + seed + recria `expenses` sem o `CHECK(method IN (...))` — SQLite não tem DROP CONSTRAINT, então é necessário `CREATE new → INSERT SELECT → DROP → RENAME`
-  - Nova tool `list_payment_methods()` e `create_payment_method(name, confirmed)`
-  - Remove `VALID_METHODS` hardcoded e `PaymentMethod = Literal[...]`
-  - System prompt: remove default "dinheiro"; adiciona regra de perguntar sempre + protocolo HITL para método novo
+- **Implementação:** ✅ concluída em 2026-05-13 (commit 3e99fcb)
+  - Alembic 0003: cria `payment_methods` + seed + recria `expenses` sem o `CHECK(method IN (...))` — SQLite não tem DROP CONSTRAINT; `CREATE new → INSERT SELECT → DROP → RENAME`
+  - Novas tools: `list_payment_methods()` e `create_payment_method(name, confirmed)`
+  - Removidos: `VALID_METHODS` hardcoded e `PaymentMethod = Literal[...]` em `schemas.py`
+  - `record_expense`: parâmetro `method` sem default (obrigatório) — agente sempre pergunta
+  - System prompt: regra de nunca assumir método + protocolo HITL idêntico ao de categorias
   - LangGraph: nenhuma mudança no grafo
-- **Reaproveitamento:** `create_payment_method` tem assinatura e guardrails idênticos a `create_category` (strip, title case, 2–30 chars, unicodedata, duplicate check case-insensitive, `confirmed` gate)
+- **Reaproveitamento:** `create_payment_method` tem assinatura e guardrails idênticos a `create_category` (strip, lowercase, 2–30 chars, unicodedata, duplicate check case-insensitive, `confirmed` gate)
 
 ### DA-013: Escopo do MVP 2 (análise crítica)
 - **Inclui:** SqliteSaver + trimming, interrupt() HITL, pytest, Alembic, retry OpenAI
@@ -565,6 +622,20 @@ O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o con
   - `pytest tests/` passa com ≥80% cobertura do MCP server
   - Schema evoluível via `alembic upgrade head`
   - Chamadas OpenAI com retry automático
+
+### DA-016: Busca textual por descrição em `query_expenses`
+- **Problema:** `query_expenses` aceita apenas filtros exatos (`category`, `method`, `start_date`, `end_date`). Quando o usuário pergunta "paguei a conta de energia?", o LLM tenta mapear para categoria ("Serviços") e ignora a descrição — retorna lista errada ou responde "não encontrei" mesmo com registro existente.
+- **Root cause:** Três falhas combinadas: (1) `query_expenses` sem busca textual; (2) `find_expense_candidates` tem busca por descrição mas está documentada como "pre-destructive only" e comprime resultados para data mais recente — comportamento errado para consultas; (3) seção "Ao CONSULTAR gastos" do system prompt não instrui o agente a buscar por descrição.
+- **Decisão:** Adicionar `keyword: Optional[str]` ao `query_expenses`. Filtragem Python com `_normalize_description` após filtros SQL — mesmo padrão já existente em `find_expense_candidates`, zero nova infra. Reescrever seção "Ao CONSULTAR gastos" com protocolo keyword-first.
+- **Alternativas rejeitadas:**
+  - FTS5: overkill para volume pessoal; `LIKE '%x%'` + Python é suficiente
+  - Nova tool `search_expenses`: proliferação desnecessária — `query_expenses` já é o ponto natural
+  - Índice em `description`: LIKE com wildcard à esquerda não usa B-tree; sem ganho
+- **Aliases ("energia" → "luz"):** instrução no system prompt para o LLM tentar termos relacionados quando `keyword` retornar 0 resultados. Sem mapa hardcoded — o LLM conhece sinônimos.
+- **Separação de responsabilidades mantida:**
+  - `query_expenses(keyword=...)` → consultas (retorna todos os registros do período)
+  - `find_expense_candidates(keyword=...)` → exclusivo para pré-delete/update (comprime para data mais recente)
+- **Implementação pendente** — ver Próximos Passos
 
 ### DA-011: Separação de responsabilidades — interpretação vs execução
 - **Decisão:** Interpretação temporal fica no LLM; lógica SQL fica no servidor MCP.
@@ -590,14 +661,23 @@ O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o con
 - Observabilidade LangSmith
 - CLI simples com loop de mensagens
 
-### MVP 2 — Robustez
+### MVP 2 — Robustez (em andamento)
 **Foco:** Qualidade e confiabilidade
-- HITL real com `interrupt()` + `SqliteSaver`
-- Memória persistente entre sessões
-- Multi-agente: Extrator + Analista + Roteador
-- Testes automatizados (pytest)
-- Logging estruturado (structlog)
-- Guardrails de output (validar que resposta faz sentido)
+
+**Concluído:**
+- [x] Alembic migrations (0001–0003)
+- [x] SqliteSaver + trim_messages — sessão persiste entre reinicializações
+- [x] interrupt() HITL — confirm_node para delete/update
+- [x] guardrail_node — bloqueia bulk delete via parallel tool calls
+- [x] Categorias dinâmicas — create_category com HITL
+- [x] Métodos de pagamento dinâmicos (DA-015) — create_payment_method com HITL
+- [x] Soft delete + audit_log em todas as operações destrutivas
+- [x] Diagramas PlantUML (arquitetura MVP 2 + atividades excluir gasto)
+- [x] Busca textual por descrição em query_expenses (DA-016) — keyword parameter com filtragem Python
+
+**Pendente:**
+- [ ] Testes automatizados pytest (DT-007)
+- [ ] Retry automático OpenAI com tenacity (DT-006)
 
 ### MVP 3 — Importação e Histórico
 **Foco:** Popular com dados reais
@@ -652,12 +732,12 @@ O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o con
 
 | ID | Descrição | Impacto | Quando resolver |
 |---|---|---|---|
-| DT-001 | `MemorySaver` in-memory perde contexto ao reiniciar | Baixo (MVP 1 é sessão única) | MVP 2 |
-| DT-002 | Sem migrations de banco (só `IF NOT EXISTS`) | Médio (bloqueante se schema mudar) | MVP 2-3 |
+| DT-001 | ~~`MemorySaver` in-memory perde contexto ao reiniciar~~ | ✅ Resolvido — AsyncSqliteSaver (MVP 2) | — |
+| DT-002 | ~~Sem migrations de banco (só `IF NOT EXISTS`)~~ | ✅ Resolvido — Alembic 0001–0003 (MVP 2) | — |
 | DT-003 | Sem testes automatizados | Alto (qualidade) | MVP 2 |
-| DT-004 | HITL via prompt, não via `interrupt()` real | Médio (segurança) | MVP 2 |
+| DT-004 | ~~HITL via prompt, não via `interrupt()` real~~ | ✅ Resolvido — confirm_node + interrupt() (MVP 2) | — |
 | DT-005 | Thread safety do SQLite (conexão única) | Baixo (single-user) | MVP 4+ |
-| DT-006 | Sem retry para falhas de chamada à OpenAI | Baixo (uso pessoal) | MVP 3 |
+| DT-006 | Sem retry para falhas de chamada à OpenAI | Baixo (uso pessoal) | MVP 2 pendente |
 | DT-007 | Sem testes automatizados para guardrails de segurança | Alto (regressão crítica) | MVP 2 — próxima prioridade |
 
 ---
@@ -679,6 +759,46 @@ O `MemorySaver` acumula todas as mensagens da sessão. Em sessões longas, o con
 
 **Nota LangSmith:** `LANGCHAIN_TRACING_V2` deve estar sem aspas no `.env` (ex: `LANGCHAIN_TRACING_V2=true`, não `="true"`).
 O LangChain lê essa variável diretamente do ambiente, não via `config.py`.
+
+### MVP 2 — Próximos Passos
+
+**Prioridade 1: DT-006 — Retry automático OpenAI**
+- Adicionar `tenacity` ao requirements.txt
+- Envolver chamadas à OpenAI com retry exponencial (3 tentativas, 1-3s delay)
+- Exemplo: `@retry(stop=stop_after_attempt(3), wait=wait_exponential())`
+
+**Prioridade 2: DT-007 — Testes automatizados para guardrails**
+- Resolver database locking em testes pytest
+- Testes críticos: `test_guardrail_blocks_parallel_delete`, `test_delete_without_confirmed_blocked`
+- Coverage mínima: 80% do MCP server
+
+### MVP 2 — Concluído: DA-016 (2026-05-14)
+
+#### Implementação de Busca Textual por Descrição
+
+1. [x] `mcp_server/server.py` — adicionado `keyword: Optional[str] = None` ao `query_expenses`
+   - Filtragem em Python com `_normalize_description` após filtros SQL
+   - Suporte a busca parcial, case-insensitive e accent-insensitive
+   - Backward compatible — sem keyword retorna todos os registros
+
+2. [x] `agent/prompts.py` — reescrita seção "Ao CONSULTAR gastos"
+   - Protocolo keyword-first: `query_expenses(keyword=...)` obrigatório para itens específicos
+   - Instrução para tentar sinônimos antes de responder "não encontrei"
+   - Distinção explícita entre `query_expenses` (consultas) vs `find_expense_candidates` (pré-delete/update)
+
+3. [x] `tests/` — testes criados (validados manualmente)
+   - Arquivo `test_da016_manual.py` com 10 testes cobrindo:
+     - Busca exata e parcial
+     - Case-insensitive e accent-insensitive
+     - Combinação com filtros de data, categoria, método
+     - Soft-delete excluído
+     - Ordenação DESC
+     - Backward compatibility sem keyword
+   - Testes pytest criados mas com limitações de database locking (DT-007 futuro)
+
+4. [x] `PROJECT_MEMORY.md` — marcado DA-016 como implementado
+
+---
 
 ### Decisão resolvida
 - [x] **Fluxo de registro:** Opção A — direto (registra imediatamente, confirma só para valores > R$ 1.000)
