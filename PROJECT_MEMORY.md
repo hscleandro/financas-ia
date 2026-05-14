@@ -4,7 +4,7 @@
 > Use este arquivo para retomar o contexto em novas sessões.
 >
 > **Última atualização:** 2026-05-13
-> **Status atual:** MVP 2 em andamento — pendente: DA-016 (busca textual), testes automatizados (DT-007) e retry OpenAI (DT-006)
+> **Status atual:** MVP 2 em andamento — pendente: testes automatizados (DT-007) e retry OpenAI (DT-006)
 
 ---
 
@@ -576,6 +576,11 @@ Nenhum código de instrumentação necessário. Ativado via env vars.
   - Migrations usam `op.execute()` com SQL raw (sem SQLAlchemy ORM) — compatível com sqlite3 existente
   - `0001_initial_schema` captura o estado atual como baseline; DBs existentes recebem `alembic stamp 0001`
 - **Regra futura:** qualquer mudança de schema passa por migration Alembic — nunca mais `ALTER TABLE` em `setup.py`
+- **Incidente 2026-05-13 — migrations não-idempotentes:** `setup_database()` criava o schema completo (com `is_system`, `payment_methods`) antes do stamp Alembic ser atualizado. Ao rodar `upgrade head`, `0002` tentava `ADD COLUMN is_system` já existente → `duplicate column name`. Root cause: migrations assumiam banco virgem.
+  - Fix `0002`: `PRAGMA table_info(categories)` antes do `ALTER TABLE` — pula se coluna existe
+  - Fix `0003`: `sqlite_master` inspeciona DDL de `expenses` — pula recreate se `CHECK(method IN` já foi removido
+  - Ambas usam `text()` do SQLAlchemy 2.x (breaking change vs 1.x — `conn.execute("raw string")` não funciona mais)
+  - **Regra:** toda migration nova deve ser idempotente — usar guards de existência antes de DDL estrutural
 
 ### DA-014: Guardrails de segurança para exclusão em massa (incidente 2026-05-12)
 - **Incidente:** Ao receber o comando "apaga todos os gastos do mês", o LLM gerou múltiplos `delete_expense` em um único `tool_calls` (parallel tool calling do OpenAI), zerando o banco. O único guardrail existente era o system prompt, que o LLM ignorou.
@@ -665,7 +670,7 @@ Nenhum código de instrumentação necessário. Ativado via env vars.
 **Foco:** Qualidade e confiabilidade
 
 **Concluído:**
-- [x] Alembic migrations (0001–0003)
+- [x] Alembic migrations (0001–0003) — idempotência corrigida em 2026-05-13 (SQLAlchemy 2.x + guards DDL)
 - [x] SqliteSaver + trim_messages — sessão persiste entre reinicializações
 - [x] interrupt() HITL — confirm_node para delete/update
 - [x] guardrail_node — bloqueia bulk delete via parallel tool calls

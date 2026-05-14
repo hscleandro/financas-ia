@@ -8,6 +8,7 @@ Distingue categorias do sistema (imutáveis, is_system=1) das criadas pelo
 usuário (is_system=0). As 10 categorias originais são marcadas como sistema.
 """
 from alembic import op
+from sqlalchemy import text
 
 revision = "0002"
 down_revision = "0001"
@@ -16,8 +17,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TABLE categories ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0")
-    op.execute("UPDATE categories SET is_system = 1")
+    conn = op.get_bind()
+    cols = {row[1] for row in conn.execute(text("PRAGMA table_info(categories)")).fetchall()}
+    if "is_system" not in cols:
+        op.execute("ALTER TABLE categories ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0")
+        op.execute("UPDATE categories SET is_system = 1")
 
 
 def downgrade() -> None:

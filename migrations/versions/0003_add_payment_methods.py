@@ -9,6 +9,7 @@ então a tabela é recriada. Adiciona payment_methods com is_system para disting
 métodos do sistema dos criados pelo usuário.
 """
 from alembic import op
+from sqlalchemy import text
 
 revision = "0003"
 down_revision = "0002"
@@ -19,7 +20,7 @@ PAYMENT_METHODS = ["dinheiro", "crédito", "débito", "pix", "transferência"]
 
 
 def upgrade() -> None:
-    # 1. Cria tabela payment_methods
+    # 1. Cria tabela payment_methods (idempotente)
     op.execute("""
         CREATE TABLE IF NOT EXISTS payment_methods (
             id          INTEGER   PRIMARY KEY AUTOINCREMENT,
@@ -34,24 +35,30 @@ def upgrade() -> None:
             f"INSERT OR IGNORE INTO payment_methods (name, is_system) VALUES ('{method}', 1)"
         )
 
-    # 2. Recria expenses sem CHECK(method IN (...))
-    # SQLite não suporta DROP CONSTRAINT — tabela recriada via rename
-    op.execute("""
-        CREATE TABLE expenses_new (
-            id           INTEGER   PRIMARY KEY AUTOINCREMENT,
-            amount       REAL      NOT NULL CHECK(amount > 0 AND amount < 100000),
-            description  TEXT      NOT NULL,
-            category     TEXT      NOT NULL REFERENCES categories(name),
-            method       TEXT      NOT NULL DEFAULT 'dinheiro',
-            expense_date DATE      NOT NULL DEFAULT CURRENT_DATE,
-            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            hash         TEXT      NOT NULL UNIQUE,
-            deleted_at   TIMESTAMP DEFAULT NULL
-        )
-    """)
-    op.execute("INSERT INTO expenses_new SELECT * FROM expenses")
-    op.execute("DROP TABLE expenses")
-    op.execute("ALTER TABLE expenses_new RENAME TO expenses")
+    # 2. Recria expenses sem CHECK(method IN (...)) — só se o constraint ainda existir
+    # SQLite não suporta DROP CONSTRAINT; tabela recriada via rename
+    conn = op.get_bind()
+    row = conn.execute(
+        text("SELECT sql FROM sqlite_master WHERE type='table' AND name='expenses'")
+    ).fetchone()
+    if row and "CHECK(method IN" in row[0]:
+        op.execute("DROP TABLE IF EXISTS expenses_new")
+        op.execute("""
+            CREATE TABLE expenses_new (
+                id           INTEGER   PRIMARY KEY AUTOINCREMENT,
+                amount       REAL      NOT NULL CHECK(amount > 0 AND amount < 100000),
+                description  TEXT      NOT NULL,
+                category     TEXT      NOT NULL REFERENCES categories(name),
+                method       TEXT      NOT NULL DEFAULT 'dinheiro',
+                expense_date DATE      NOT NULL DEFAULT CURRENT_DATE,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                hash         TEXT      NOT NULL UNIQUE,
+                deleted_at   TIMESTAMP DEFAULT NULL
+            )
+        """)
+        op.execute("INSERT INTO expenses_new SELECT * FROM expenses")
+        op.execute("DROP TABLE expenses")
+        op.execute("ALTER TABLE expenses_new RENAME TO expenses")
 
 
 def downgrade() -> None:
