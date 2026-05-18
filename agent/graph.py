@@ -76,6 +76,37 @@ def _format_confirmation(tc: dict) -> str:
     return f"Confirme a operação '{name}' no registro ID #{expense_id}. (sim/não)"
 
 
+def should_call_tools(state: AgentState) -> str:
+    """Roteador condicional — determina o próximo nó após agent_node."""
+    last = state["messages"][-1]
+    if not (hasattr(last, "tool_calls") and last.tool_calls):
+        return END
+
+    # Bloqueia múltiplos delete_expense em paralelo (bulk delete)
+    delete_calls = [tc for tc in last.tool_calls if tc["name"] == "delete_expense"]
+    if len(delete_calls) > 1:
+        return "guardrail_node"
+
+    # Operações destrutivas passam por HITL obrigatório
+    if any(tc["name"] in DESTRUCTIVE_TOOLS for tc in last.tool_calls):
+        return "confirm_node"
+
+    return "tool_node"
+
+
+async def guardrail_node(state: AgentState) -> dict:
+    """Intercepta multi-delete paralelo antes do tool_node."""
+    last = state["messages"][-1]
+    stubs = [
+        ToolMessage(
+            content='{"error": "Bloqueado: exclusão em massa não é permitida.", "tipo": "bloqueado"}',
+            tool_call_id=tc["id"],
+        )
+        for tc in last.tool_calls
+    ]
+    return {"messages": stubs + [AIMessage(content=_BULK_DELETE_MSG)]}
+
+
 def build_graph(tools: list, checkpointer=None):
     llm = ChatOpenAI(
         model=settings.openai_model,
@@ -97,34 +128,6 @@ def build_graph(tools: list, checkpointer=None):
         messages = [SystemMessage(content=system_prompt)] + trimmed
         response = await llm_with_tools.ainvoke(messages)
         return {"messages": [response]}
-
-    def should_call_tools(state: AgentState) -> str:
-        last = state["messages"][-1]
-        if not (hasattr(last, "tool_calls") and last.tool_calls):
-            return END
-
-        # Block parallel bulk delete
-        delete_calls = [tc for tc in last.tool_calls if tc["name"] == "delete_expense"]
-        if len(delete_calls) > 1:
-            return "guardrail_node"
-
-        # Route destructive ops through HITL interrupt
-        if any(tc["name"] in DESTRUCTIVE_TOOLS for tc in last.tool_calls):
-            return "confirm_node"
-
-        return "tool_node"
-
-    async def guardrail_node(state: AgentState) -> dict:
-        """Intercepta multi-delete paralelo antes do tool_node."""
-        last = state["messages"][-1]
-        stubs = [
-            ToolMessage(
-                content='{"error": "Bloqueado: exclusão em massa não é permitida.", "tipo": "bloqueado"}',
-                tool_call_id=tc["id"],
-            )
-            for tc in last.tool_calls
-        ]
-        return {"messages": stubs + [AIMessage(content=_BULK_DELETE_MSG)]}
 
     def confirm_node(state: AgentState) -> Command:
         """HITL via interrupt(): pausa antes de executar delete/update."""
