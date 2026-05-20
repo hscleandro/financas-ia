@@ -11,22 +11,18 @@ if hasattr(sys.stdout, "reconfigure"):
 from alembic import command
 from alembic.config import Config
 from langchain_core.messages import HumanMessage
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 
 from agent.graph import build_graph
+from agent.tools import build_tools
 from config import settings
+from database.setup import get_connection
+from services.expense_service import ExpenseService
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
-MCP_CONFIG = {
-    "financas": {
-        "command": "python",
-        "args": ["mcp_server/server.py"],
-        "transport": "stdio",
-    }
-}
+# MCP removido — service layer substitui subprocess
 
 # Sessão única: mesmo thread_id a cada execução mantém o histórico
 THREAD_ID = "default"
@@ -65,51 +61,57 @@ async def run_chat() -> None:
 
     config = {"configurable": {"thread_id": THREAD_ID}}
 
-    client = MultiServerMCPClient(MCP_CONFIG)
-    tools = await client.get_tools()
+    # Service Layer: conexão SQLite compartilhada para a sessão CLI
+    # No Sprint 2 (multi-tenant): user_id virá da autenticação
+    conn = get_connection()
+    service = ExpenseService(conn, user_id=None)  # user_id=None para single-user por enquanto
+    tools = build_tools(service)
 
-    async with AsyncSqliteSaver.from_conn_string(settings.checkpoints_path) as checkpointer:
-        graph = build_graph(tools, checkpointer=checkpointer)
+    try:
+        async with AsyncSqliteSaver.from_conn_string(settings.checkpoints_path) as checkpointer:
+            graph = build_graph(tools, checkpointer=checkpointer)
 
-        state = await graph.aget_state(config)
-        msg_count = len(state.values.get("messages", [])) if state.values else 0
+            state = await graph.aget_state(config)
+            msg_count = len(state.values.get("messages", [])) if state.values else 0
 
-        print("=" * 50)
-        print("  Assistente Financeiro Pessoal — MVP 2")
-        if msg_count:
-            print(f"  Sessão anterior carregada ({msg_count} mensagens).")
-        else:
-            print("  Nova sessão iniciada.")
-        print("  Digite 'sair' para encerrar.")
-        print("=" * 50)
-        print()
+            print("=" * 50)
+            print("  Assistente Financeiro Pessoal — MVP 3 (Service Layer)")
+            if msg_count:
+                print(f"  Sessão anterior carregada ({msg_count} mensagens).")
+            else:
+                print("  Nova sessão iniciada.")
+            print("  Digite 'sair' para encerrar.")
+            print("=" * 50)
+            print()
 
-        while True:
-            try:
-                user_input = input("Você: ").strip()
-            except (KeyboardInterrupt, EOFError):
-                print("\nEncerrando...")
-                break
+            while True:
+                try:
+                    user_input = input("Você: ").strip()
+                except (KeyboardInterrupt, EOFError):
+                    print("\nEncerrando...")
+                    break
 
-            if not user_input:
-                continue
-            if user_input.lower() in ("sair", "exit", "quit"):
-                print("Até logo!")
-                break
+                if not user_input:
+                    continue
+                if user_input.lower() in ("sair", "exit", "quit"):
+                    print("Até logo!")
+                    break
 
-            try:
-                result = await _invoke(
-                    graph,
-                    {"messages": [HumanMessage(content=user_input)]},
-                    config=config,
-                )
-                last = result["messages"][-1]
-                print(f"\nAssistente: {last.content}\n")
-            except SystemExit:
-                print("Até logo!")
-                break
-            except Exception as e:
-                print(f"\nErro: {e}\n")
+                try:
+                    result = await _invoke(
+                        graph,
+                        {"messages": [HumanMessage(content=user_input)]},
+                        config=config,
+                    )
+                    last = result["messages"][-1]
+                    print(f"\nAssistente: {last.content}\n")
+                except SystemExit:
+                    print("Até logo!")
+                    break
+                except Exception as e:
+                    print(f"\nErro: {e}\n")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
