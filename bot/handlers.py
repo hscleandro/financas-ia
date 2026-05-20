@@ -70,6 +70,7 @@ async def process_telegram_message(
 
         # 4. Verificar se há interrupt pendente (HITL)
         state = await graph.aget_state(config)
+        logger.info(f"Estado do grafo - next: {state.next}, tasks: {state.tasks}")
 
         if state.next:
             # Interrupt pendente → usuário está respondendo confirmação
@@ -85,6 +86,11 @@ async def process_telegram_message(
         # 5. Extrair resposta final
         last_message = result["messages"][-1]
         response_text = last_message.content
+
+        # Validar que a resposta não está vazia
+        if not response_text or not response_text.strip():
+            logger.warning(f"Resposta vazia do agente. Última mensagem: {last_message}")
+            response_text = "✅ Operação concluída."
 
         # 6. Verificar se há novo interrupt (HITL)
         new_state = await graph.aget_state(config)
