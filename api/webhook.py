@@ -24,7 +24,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from telegram import Bot, Update
 
 from config import settings
-from telegram.handlers import process_telegram_message, process_telegram_callback
+from bot.handlers import process_telegram_message, process_telegram_callback
 
 logging.basicConfig(
     level=logging.INFO,

@@ -10,3 +10,14 @@ venv/
 *.egg-info/
 dist/
 build/
+
+# Artefatos de runtime
+.coverage
+*.db-shm
+*.db-wal
+htmlcov/
+.pytest_cache/
+
+# Documentos de planejamento local (não versionar)
+ARQUITETURA_MVP*.md
+PLANO_EXECUCAO_MVP*.md
