@@ -31,15 +31,27 @@ class ExpenseService:
     # ─── Utilitários privados ───────────────────────────────────────────
 
     def _get_valid_categories(self) -> set[str]:
-        """Retorna categorias disponíveis (no Sprint 2: filtradas por user_id)."""
-        query = "SELECT name FROM categories"
-        rows = self.conn.execute(query).fetchall()
+        """Retorna categorias disponíveis — system + custom do usuário."""
+        if self.user_id is not None:
+            # Multi-tenant: system (user_id NULL) + categorias do usuário
+            query = "SELECT name FROM categories WHERE user_id IS NULL OR user_id = ?"
+            rows = self.conn.execute(query, (self.user_id,)).fetchall()
+        else:
+            # Single-user (compatibilidade Sprint 1)
+            query = "SELECT name FROM categories"
+            rows = self.conn.execute(query).fetchall()
         return {row["name"] for row in rows}
 
     def _get_valid_methods(self) -> set[str]:
-        """Retorna métodos de pagamento disponíveis (no Sprint 2: filtrados por user_id)."""
-        query = "SELECT name FROM payment_methods"
-        rows = self.conn.execute(query).fetchall()
+        """Retorna métodos de pagamento disponíveis — system + custom do usuário."""
+        if self.user_id is not None:
+            # Multi-tenant: system (user_id NULL) + métodos do usuário
+            query = "SELECT name FROM payment_methods WHERE user_id IS NULL OR user_id = ?"
+            rows = self.conn.execute(query, (self.user_id,)).fetchall()
+        else:
+            # Single-user (compatibilidade Sprint 1)
+            query = "SELECT name FROM payment_methods"
+            rows = self.conn.execute(query).fetchall()
         return {row["name"] for row in rows}
 
     @staticmethod
@@ -137,20 +149,39 @@ class ExpenseService:
         expense_hash = self._compute_hash(expense.amount, expense.description, expense.expense_date)
 
         try:
-            cursor = self.conn.execute(
-                """
-                INSERT INTO expenses (amount, description, category, method, expense_date, hash)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    expense.amount,
-                    expense.description,
-                    expense.category,
-                    expense.method,
-                    expense.expense_date.isoformat(),
-                    expense_hash,
-                ),
-            )
+            if self.user_id is not None:
+                # Multi-tenant: inclui user_id
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO expenses (user_id, amount, description, category, method, expense_date, hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self.user_id,
+                        expense.amount,
+                        expense.description,
+                        expense.category,
+                        expense.method,
+                        expense.expense_date.isoformat(),
+                        expense_hash,
+                    ),
+                )
+            else:
+                # Single-user (compatibilidade Sprint 1)
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO expenses (amount, description, category, method, expense_date, hash)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        expense.amount,
+                        expense.description,
+                        expense.category,
+                        expense.method,
+                        expense.expense_date.isoformat(),
+                        expense_hash,
+                    ),
+                )
             self.conn.commit()
             expense_id = cursor.lastrowid
 
@@ -196,6 +227,11 @@ class ExpenseService:
             "FROM expenses WHERE deleted_at IS NULL"
         )
         params: list = []
+
+        # Multi-tenant: filtrar por user_id
+        if self.user_id is not None:
+            query += " AND user_id = ?"
+            params.append(self.user_id)
 
         if start_date:
             query += " AND expense_date >= ?"
@@ -252,19 +288,31 @@ class ExpenseService:
             "month": "strftime('%Y-%m', expense_date)",
         }[group_by]
 
+        # Multi-tenant: adicionar filtro user_id
+        user_filter = " AND user_id = ?" if self.user_id is not None else ""
+        params = [start_date, end_date]
+        if self.user_id is not None:
+            params.append(self.user_id)
+
         query = f"""
             SELECT {group_expr} AS dimension, SUM(amount) AS total, COUNT(*) AS count
             FROM expenses
             WHERE expense_date BETWEEN ? AND ?
               AND deleted_at IS NULL
+              {user_filter}
             GROUP BY {group_expr}
             ORDER BY total DESC
         """
 
-        rows = self.conn.execute(query, (start_date, end_date)).fetchall()
+        rows = self.conn.execute(query, tuple(params)).fetchall()
+
+        total_params = [start_date, end_date]
+        if self.user_id is not None:
+            total_params.append(self.user_id)
+
         total_row = self.conn.execute(
-            "SELECT SUM(amount) FROM expenses WHERE expense_date BETWEEN ? AND ? AND deleted_at IS NULL",
-            (start_date, end_date),
+            f"SELECT SUM(amount) FROM expenses WHERE expense_date BETWEEN ? AND ? AND deleted_at IS NULL{user_filter}",
+            tuple(total_params),
         ).fetchone()
 
         return {
@@ -280,13 +328,13 @@ class ExpenseService:
 
     def list_categories(self) -> list[str]:
         """Retorna a lista de categorias de gastos disponíveis."""
-        rows = self.conn.execute("SELECT name FROM categories ORDER BY name").fetchall()
-        return [row["name"] for row in rows]
+        # Usa _get_valid_categories que já tem filtro de user_id
+        return sorted(list(self._get_valid_categories()))
 
     def list_payment_methods(self) -> list[str]:
         """Retorna a lista de métodos de pagamento disponíveis."""
-        rows = self.conn.execute("SELECT name FROM payment_methods ORDER BY name").fetchall()
-        return [row["name"] for row in rows]
+        # Usa _get_valid_methods que já tem filtro de user_id
+        return sorted(list(self._get_valid_methods()))
 
     def create_payment_method(self, name: str, confirmed: bool) -> dict:
         """Cria um novo método de pagamento definido pelo usuário.
@@ -311,13 +359,29 @@ class ExpenseService:
         if error:
             return {"error": error, "tipo": "invalido"}
 
-        existing = self.conn.execute(
-            "SELECT name FROM payment_methods WHERE LOWER(name) = LOWER(?)", (clean,)
-        ).fetchone()
+        # Multi-tenant: verificar conflito no escopo correto (system + user)
+        if self.user_id is not None:
+            existing = self.conn.execute(
+                "SELECT name FROM payment_methods WHERE LOWER(name) = LOWER(?) AND (user_id IS NULL OR user_id = ?)",
+                (clean, self.user_id),
+            ).fetchone()
+        else:
+            existing = self.conn.execute(
+                "SELECT name FROM payment_methods WHERE LOWER(name) = LOWER(?)", (clean,)
+            ).fetchone()
+
         if existing:
             return {"error": f"Método '{existing['name']}' já existe.", "tipo": "duplicata"}
 
-        self.conn.execute("INSERT INTO payment_methods (name, is_system) VALUES (?, 0)", (clean,))
+        # Multi-tenant: incluir user_id
+        if self.user_id is not None:
+            self.conn.execute(
+                "INSERT INTO payment_methods (name, is_system, user_id) VALUES (?, 0, ?)",
+                (clean, self.user_id),
+            )
+        else:
+            self.conn.execute("INSERT INTO payment_methods (name, is_system) VALUES (?, 0)", (clean,))
+
         self.conn.commit()
 
         logger.info("Método de pagamento criado pelo usuário: %s", clean)
@@ -347,18 +411,34 @@ class ExpenseService:
         if error:
             return {"error": error, "tipo": "invalido"}
 
-        existing = self.conn.execute(
-            "SELECT name FROM categories WHERE LOWER(name) = LOWER(?)", (clean,)
-        ).fetchone()
+        # Multi-tenant: verificar conflito no escopo correto (system + user)
+        if self.user_id is not None:
+            existing = self.conn.execute(
+                "SELECT name FROM categories WHERE LOWER(name) = LOWER(?) AND (user_id IS NULL OR user_id = ?)",
+                (clean, self.user_id),
+            ).fetchone()
+        else:
+            existing = self.conn.execute(
+                "SELECT name FROM categories WHERE LOWER(name) = LOWER(?)", (clean,)
+            ).fetchone()
+
         if existing:
             return {
                 "error": f"Categoria '{existing['name']}' já existe.",
                 "tipo": "duplicata",
             }
 
-        self.conn.execute(
-            "INSERT INTO categories (name, is_system) VALUES (?, 0)", (clean,)
-        )
+        # Multi-tenant: incluir user_id
+        if self.user_id is not None:
+            self.conn.execute(
+                "INSERT INTO categories (name, is_system, user_id) VALUES (?, 0, ?)",
+                (clean, self.user_id),
+            )
+        else:
+            self.conn.execute(
+                "INSERT INTO categories (name, is_system) VALUES (?, 0)", (clean,)
+            )
+
         self.conn.commit()
 
         logger.info("Categoria criada pelo usuário: %s", clean)
@@ -385,11 +465,20 @@ class ExpenseService:
         """
         normalized_kw = self._normalize_description(keyword)
 
-        all_rows = self.conn.execute(
-            "SELECT id, amount, description, category, method, expense_date "
-            "FROM expenses WHERE deleted_at IS NULL "
-            "ORDER BY expense_date DESC, id DESC"
-        ).fetchall()
+        # Multi-tenant: filtrar por user_id
+        if self.user_id is not None:
+            all_rows = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date "
+                "FROM expenses WHERE deleted_at IS NULL AND user_id = ? "
+                "ORDER BY expense_date DESC, id DESC",
+                (self.user_id,),
+            ).fetchall()
+        else:
+            all_rows = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date "
+                "FROM expenses WHERE deleted_at IS NULL "
+                "ORDER BY expense_date DESC, id DESC"
+            ).fetchall()
 
         # Filtragem em Python para suporte correto a Unicode/acentos
         matching = [
@@ -434,11 +523,19 @@ class ExpenseService:
                 "tipo": "nao_confirmado",
             }
 
-        row = self.conn.execute(
-            "SELECT id, amount, description, category, method, expense_date "
-            "FROM expenses WHERE id = ? AND deleted_at IS NULL",
-            (expense_id,),
-        ).fetchone()
+        # Multi-tenant: verificar que o expense pertence ao usuário
+        if self.user_id is not None:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date "
+                "FROM expenses WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+                (expense_id, self.user_id),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date "
+                "FROM expenses WHERE id = ? AND deleted_at IS NULL",
+                (expense_id,),
+            ).fetchone()
 
         if not row:
             return {
@@ -452,10 +549,19 @@ class ExpenseService:
             "UPDATE expenses SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
             (expense_id,),
         )
-        self.conn.execute(
-            "INSERT INTO audit_log (operation, expense_id, old_data) VALUES (?, ?, ?)",
-            ("delete", expense_id, json.dumps(old_data, ensure_ascii=False)),
-        )
+
+        # Multi-tenant: incluir user_id no audit_log
+        if self.user_id is not None:
+            self.conn.execute(
+                "INSERT INTO audit_log (operation, expense_id, old_data, user_id) VALUES (?, ?, ?, ?)",
+                ("delete", expense_id, json.dumps(old_data, ensure_ascii=False), self.user_id),
+            )
+        else:
+            self.conn.execute(
+                "INSERT INTO audit_log (operation, expense_id, old_data) VALUES (?, ?, ?)",
+                ("delete", expense_id, json.dumps(old_data, ensure_ascii=False)),
+            )
+
         self.conn.commit()
 
         logger.info("Registro #%d excluído: %s", expense_id, old_data.get("description"))
@@ -536,11 +642,19 @@ class ExpenseService:
         if not changes:
             return {"error": "Nenhum campo para atualizar foi fornecido.", "tipo": "invalido"}
 
-        row = self.conn.execute(
-            "SELECT id, amount, description, category, method, expense_date, hash "
-            "FROM expenses WHERE id = ? AND deleted_at IS NULL",
-            (expense_id,),
-        ).fetchone()
+        # Multi-tenant: verificar que o expense pertence ao usuário
+        if self.user_id is not None:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date, hash "
+                "FROM expenses WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
+                (expense_id, self.user_id),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date, hash "
+                "FROM expenses WHERE id = ? AND deleted_at IS NULL",
+                (expense_id,),
+            ).fetchone()
 
         if not row:
             return {
@@ -572,15 +686,29 @@ class ExpenseService:
         ).fetchone()
         new_data = self._row_to_dict(new_row)
 
-        self.conn.execute(
-            "INSERT INTO audit_log (operation, expense_id, old_data, new_data) VALUES (?, ?, ?, ?)",
-            (
-                "update",
-                expense_id,
-                json.dumps(old_data, ensure_ascii=False),
-                json.dumps(new_data, ensure_ascii=False),
-            ),
-        )
+        # Multi-tenant: incluir user_id no audit_log
+        if self.user_id is not None:
+            self.conn.execute(
+                "INSERT INTO audit_log (operation, expense_id, old_data, new_data, user_id) VALUES (?, ?, ?, ?, ?)",
+                (
+                    "update",
+                    expense_id,
+                    json.dumps(old_data, ensure_ascii=False),
+                    json.dumps(new_data, ensure_ascii=False),
+                    self.user_id,
+                ),
+            )
+        else:
+            self.conn.execute(
+                "INSERT INTO audit_log (operation, expense_id, old_data, new_data) VALUES (?, ?, ?, ?)",
+                (
+                    "update",
+                    expense_id,
+                    json.dumps(old_data, ensure_ascii=False),
+                    json.dumps(new_data, ensure_ascii=False),
+                ),
+            )
+
         self.conn.commit()
 
         logger.info("Registro #%d atualizado", expense_id)
