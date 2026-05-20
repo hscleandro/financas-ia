@@ -494,6 +494,41 @@ pytest --cov=. --cov-report=html
 pytest tests/test_multitenant_isolation.py -v
 ```
 
+## 💬 Otimizações de UX para Telegram
+
+O bot foi otimizado especificamente para a experiência mobile do Telegram:
+
+### Características
+
+- ✅ **Mensagens curtas e diretas** (2-3 linhas)
+- ✅ **Formatação Markdown aprimorada** (negrito, itálico, estrutura)
+- ✅ **Emojis estratégicos** para feedback visual rápido
+- ✅ **Botões inline claros** ("✅ Sim, confirmar" vs "❌ Não, cancelar")
+- ✅ **Listas truncadas** (máx 10 itens + resumo)
+- ✅ **Respostas otimizadas** para leitura em tela pequena
+
+### Exemplo de Interação
+
+**Usuário:** "Gastei 50 reais no almoço com pix"
+
+**Bot:**
+```
+✅ R$ 50,00 · Almoço · Alimentação · pix · 19/05/2026
+```
+
+**Usuário:** "Quanto gastei em alimentação esse mês?"
+
+**Bot:**
+```
+📊 Resumo - Maio 2026
+
+🍔 Alimentação: R$ 1.250,00
+
+💰 Total: R$ 1.250,00
+```
+
+Para mais detalhes, consulte: [docs/UX_TELEGRAM_GUIDELINES.md](docs/UX_TELEGRAM_GUIDELINES.md)
+
 ## 📦 Dependências Principais
 
 - **python-telegram-bot** - Interface com Telegram API
@@ -531,7 +566,7 @@ curl http://localhost:8000/health
 ### Deploy Manual
 
 Para deploy em produção sem Docker, consulte:
-- `README_TELEGRAM.md` - Guia completo de integração Telegram
+- [docs/README_TELEGRAM.md](docs/README_TELEGRAM.md) - Guia completo de integração Telegram
 - `api/webhook.py` - Implementação do webhook FastAPI
 
 ### Plataformas Recomendadas
@@ -541,6 +576,13 @@ Para deploy em produção sem Docker, consulte:
 - **Railway** - Deploy automático via Git
 - **Fly.io** - Containerização nativa
 - **Render** - Deploy gratuito (tier limitado)
+
+## 📚 Documentação Adicional
+
+- [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) - Estrutura completa do projeto
+- [docs/UX_TELEGRAM_GUIDELINES.md](docs/UX_TELEGRAM_GUIDELINES.md) - Boas práticas de UX
+- [docs/CHANGELOG_SPRINT5.md](docs/CHANGELOG_SPRINT5.md) - Mudanças da Sprint 5
+- [docs/README_TELEGRAM.md](docs/README_TELEGRAM.md) - Integração Telegram detalhada
 
 ## 📝 Licença
 

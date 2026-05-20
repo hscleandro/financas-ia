@@ -19,12 +19,18 @@ htmlcov/
 .pytest_cache/
 
 # Documentos de planejamento local (não versionar)
-ARQUITETURA_MVP*.md
-PLANO_EXECUCAO_MVP*.md
+docs/planning/
 
 # Dados persistentes (Docker volumes)
 data/*
 !data/.gitkeep
 
-# Backups
+# Backups e arquivos temporários
 *.backup
+*.bak
+*.tmp
+*.log
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db

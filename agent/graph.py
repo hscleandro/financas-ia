@@ -9,12 +9,13 @@ from langgraph.types import Command, interrupt
 from typing_extensions import TypedDict
 
 from agent.prompts import get_system_prompt
+from agent.prompts_telegram import get_telegram_system_prompt
 from config import settings
 
 _BULK_DELETE_MSG = (
-    "Por segurança, exclusões em massa não são permitidas.\n\n"
-    "O sistema permite excluir apenas um registro por vez, "
-    "mediante identificação e confirmação explícita do registro específico."
+    "🚫 *Exclusões em massa não são permitidas*\n\n"
+    "O sistema permite excluir apenas *um registro por vez*, "
+    "com confirmação explícita."
 )
 
 DESTRUCTIVE_TOOLS = {"delete_expense", "update_expense"}
@@ -40,6 +41,7 @@ def _get_expense_for_confirm(expense_id: int) -> dict | None:
 
 
 def _format_confirmation(tc: dict) -> str:
+    """Formata mensagem de confirmação otimizada para Telegram."""
     name = tc["name"]
     args = tc.get("args", {})
     expense_id = args.get("expense_id")
@@ -49,31 +51,45 @@ def _format_confirmation(tc: dict) -> str:
     if name == "delete_expense":
         if record:
             return (
-                f"Confirme a exclusão do registro:\n"
-                f"  ID #{record['id']} · R$ {record['amount']:.2f} · "
-                f"{record['description']} · {record['category']} · "
-                f"{record['method']} · {record['expense_date']}\n\n"
-                f"Tem certeza? (sim/não)"
+                f"🗑️ *Confirme a exclusão*\n\n"
+                f"📝 {record['description']}\n"
+                f"💰 *R$ {record['amount']:.2f}*\n"
+                f"🏷️ {record['category']} · {record['method']}\n"
+                f"📅 {record['expense_date']}\n"
+                f"🔢 ID #{record['id']}\n\n"
+                f"Tem certeza?"
             )
-        return f"Confirme a exclusão do registro ID #{expense_id}.\n\nTem certeza? (sim/não)"
+        return f"🗑️ *Confirme a exclusão*\n\nID #{expense_id}\n\nTem certeza?"
 
     elif name == "update_expense":
         changes = {
             k: v for k, v in args.items()
             if k not in {"expense_id", "confirmed"} and v is not None
         }
-        changes_str = "\n".join(f"  {k}: → {v}" for k, v in changes.items()) if changes else "  (sem alterações)"
-        header = (
-            f"ID #{record['id']} · {record['description']} · {record['expense_date']}"
-            if record else f"ID #{expense_id}"
-        )
-        return (
-            f"Confirme a atualização do registro {header}:\n"
-            f"{changes_str}\n\n"
-            f"Confirmar? (sim/não)"
-        )
 
-    return f"Confirme a operação '{name}' no registro ID #{expense_id}. (sim/não)"
+        if record:
+            header = (
+                f"✏️ *Atualizar registro*\n\n"
+                f"📝 {record['description']}\n"
+                f"📅 {record['expense_date']}\n"
+                f"🔢 ID #{record['id']}\n"
+            )
+        else:
+            header = f"✏️ *Atualizar registro #${expense_id}*\n\n"
+
+        if changes:
+            changes_lines = []
+            for k, v in changes.items():
+                emoji = {"amount": "💰", "description": "📝", "category": "🏷️",
+                        "method": "💳", "expense_date": "📅"}.get(k, "•")
+                changes_lines.append(f"{emoji} {k}: *{v}*")
+            changes_str = "\n".join(changes_lines)
+        else:
+            changes_str = "_(sem alterações)_"
+
+        return f"{header}{changes_str}\n\nConfirmar?"
+
+    return f"⚠️ Confirmar operação '{name}' no registro ID #{expense_id}?"
 
 
 def should_call_tools(state: AgentState) -> str:
@@ -107,14 +123,23 @@ async def guardrail_node(state: AgentState) -> dict:
     return {"messages": stubs + [AIMessage(content=_BULK_DELETE_MSG)]}
 
 
-def build_graph(tools: list, checkpointer=None):
+def build_graph(tools: list, checkpointer=None, use_telegram_prompt: bool = True):
+    """Build LangGraph com opção de usar prompt otimizado para Telegram.
+
+    Args:
+        tools: Lista de tools do LangChain
+        checkpointer: AsyncSqliteSaver para persistência
+        use_telegram_prompt: Se True, usa prompt otimizado para Telegram (padrão)
+    """
     llm = ChatOpenAI(
         model=settings.openai_model,
         temperature=0,
         api_key=settings.openai_api_key,
     )
     llm_with_tools = llm.bind_tools(tools)
-    system_prompt = get_system_prompt()
+
+    # Usar prompt otimizado para Telegram por padrão
+    system_prompt = get_telegram_system_prompt() if use_telegram_prompt else get_system_prompt()
 
     async def agent_node(state: AgentState) -> dict:
         trimmed = trim_messages(
@@ -155,7 +180,7 @@ def build_graph(tools: list, checkpointer=None):
                 )
                 for t in last.tool_calls
             ]
-            cancel = AIMessage(content="Operação cancelada. Nenhum registro foi alterado.")
+            cancel = AIMessage(content="❌ *Operação cancelada*\n\nNenhum registro foi alterado.")
             return Command(update={"messages": stubs + [cancel]}, goto=END)
 
     graph = StateGraph(AgentState)
