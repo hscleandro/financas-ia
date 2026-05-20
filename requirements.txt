@@ -19,4 +19,4 @@ pytest-cov==4.1.0
 # MVP 3 — Telegram Bot
 python-telegram-bot==21.0.1
 fastapi==0.115.0
-uvicorn[standard]==0.32.0
+uvicorn[standard]>=0.35.0

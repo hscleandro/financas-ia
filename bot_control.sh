@@ -5,6 +5,14 @@ BOT_SCRIPT="main_telegram_polling.py"
 LOG_FILE="/tmp/telegram_bot.log"
 PID_FILE="/tmp/telegram_bot.pid"
 
+# Ativar ambiente virtual se existir
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -d "$SCRIPT_DIR/venv" ]; then
+    PYTHON_CMD="$SCRIPT_DIR/venv/bin/python"
+else
+    PYTHON_CMD="python"
+fi
+
 case "$1" in
     start)
         if [ -f "$PID_FILE" ]; then
@@ -16,7 +24,7 @@ case "$1" in
         fi
 
         echo "🚀 Iniciando bot em background..."
-        nohup python "$BOT_SCRIPT" > "$LOG_FILE" 2>&1 &
+        nohup "$PYTHON_CMD" "$BOT_SCRIPT" > "$LOG_FILE" 2>&1 &
         echo $! > "$PID_FILE"
         echo "✅ Bot iniciado (PID: $(cat $PID_FILE))"
         echo "📝 Logs: tail -f $LOG_FILE"
