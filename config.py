@@ -15,5 +15,10 @@ class Settings(BaseSettings):
     langchain_api_key: str = ""
     langchain_project: str = "financas-ia-mvp1"
 
+    # Telegram Bot (MVP 3)
+    telegram_bot_token: str = ""
+    telegram_webhook_secret: str = "change-me-in-production"
+    telegram_webhook_url: str = ""  # Ex: https://seu-dominio.com/webhook/telegram
+
 
 settings = Settings()
