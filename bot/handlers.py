@@ -83,25 +83,39 @@ async def process_telegram_message(
                 {"messages": [HumanMessage(content=text)]}, config
             )
 
-        # 5. Extrair resposta final
-        last_message = result["messages"][-1]
-        response_text = last_message.content
-
-        # Validar que a resposta não está vazia
-        if not response_text or not response_text.strip():
-            logger.warning(f"Resposta vazia do agente. Última mensagem: {last_message}")
-            response_text = "✅ Operação concluída."
-
-        # 6. Verificar se há novo interrupt (HITL)
-        new_state = await graph.aget_state(config)
+        # 5. Verificar se há interrupt (HITL) e extrair mensagem correta
         keyboard = None
+        response_text = None
 
         if "__interrupt__" in result and result["__interrupt__"]:
-            # Interrupt disparado — adicionar botões de confirmação
+            # Interrupt disparado — mensagem vem do interrupt, não do AIMessage
             keyboard = get_confirmation_keyboard()
-            # Mensagem do interrupt já está em response_text (vem do confirm_node)
+            interrupts = result["__interrupt__"]
 
-        # 7. Enviar resposta
+            # Pegar a mensagem de confirmação do interrupt
+            if interrupts and len(interrupts) > 0:
+                interrupt_obj = interrupts[0]
+
+                # Interrupt pode ser um objeto com atributo .value ou um dict
+                if hasattr(interrupt_obj, "value"):
+                    response_text = interrupt_obj.value
+                elif isinstance(interrupt_obj, dict) and "value" in interrupt_obj:
+                    response_text = interrupt_obj["value"]
+                else:
+                    # Fallback
+                    response_text = str(interrupt_obj)
+
+        # 6. Se não houver interrupt, pegar resposta normal do agente
+        if not response_text:
+            last_message = result["messages"][-1]
+            response_text = last_message.content
+
+        # 7. Validar que a resposta não está vazia
+        if not response_text or not response_text.strip():
+            logger.warning(f"Resposta vazia. Result: {result.keys()}, interrupt: {result.get('__interrupt__')}")
+            response_text = "✅ Operação concluída."
+
+        # 8. Enviar resposta
         await bot.send_message(
             chat_id=chat_id,
             text=response_text,
