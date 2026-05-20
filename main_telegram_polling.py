@@ -20,7 +20,7 @@ from telegram import Update
 from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
 
 from config import settings
-from telegram.handlers import process_telegram_message, process_telegram_callback
+from bot.handlers import process_telegram_message, process_telegram_callback
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,7 +81,9 @@ async def handle_callback(update: Update, context) -> None:
 
 async def main() -> None:
     """Inicializa bot em modo polling."""
-    run_migrations()
+    # Migrations já devem ter sido rodadas pelo setup_telegram_user.py
+    # run_migrations() pode travar em background, então comentamos
+    # Se precisar rodar migrations, use: python setup_telegram_user.py <telegram_id>
 
     if not settings.telegram_bot_token:
         logger.error("TELEGRAM_BOT_TOKEN não configurado no .env")
@@ -92,7 +94,10 @@ async def main() -> None:
     logger.info(f"Checkpoints: {settings.checkpoints_path}")
 
     # Criar checkpointer (compartilhado entre todas as mensagens)
+    logger.info("Criando checkpointer...")
     async with AsyncSqliteSaver.from_conn_string(settings.checkpoints_path) as checkpointer:
+        logger.info("✅ Checkpointer criado!")
+
         # Criar aplicação do Telegram
         app = Application.builder().token(settings.telegram_bot_token).build()
 
