@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  financas-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: financas-ia-bot
+    environment:
+      # Modo de execução: polling (dev) ou webhook (prod)
+      BOT_MODE: ${BOT_MODE:-polling}
+
+      # API Keys (obrigatórias)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+
+      # Telegram Webhook (apenas para modo webhook)
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-change-me}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+
+      # Banco de dados (caminhos dentro do container)
+      DATABASE_PATH: /app/data/financas.db
+      CHECKPOINTS_PATH: /app/data/checkpoints.db
+
+    volumes:
+      # Persistir banco de dados
+      - ./data:/app/data
+
+      # Desenvolvimento: hot reload (comentar em produção)
+      # - .:/app
+
+    ports:
+      # Expor porta 8000 apenas para modo webhook
+      - "8000:8000"
+
+    restart: unless-stopped
+
+    # Healthcheck
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f python || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# Volumes nomeados (alternativa aos bind mounts)
+volumes:
+  bot-data:
+    driver: local

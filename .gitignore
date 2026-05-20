@@ -21,3 +21,10 @@ htmlcov/
 # Documentos de planejamento local (não versionar)
 ARQUITETURA_MVP*.md
 PLANO_EXECUCAO_MVP*.md
+
+# Dados persistentes (Docker volumes)
+data/*
+!data/.gitkeep
+
+# Backups
+*.backup

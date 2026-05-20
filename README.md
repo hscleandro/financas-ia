@@ -153,6 +153,161 @@ tail -f /tmp/telegram_bot.log
 pkill -f main_telegram_polling.py
 ```
 
+#### Opção C: Docker (Recomendado para Produção)
+
+Docker simplifica o deployment e garante consistência entre ambientes.
+
+##### 1. Pré-requisitos Docker
+
+- Docker instalado ([Guia de instalação](https://docs.docker.com/get-docker/))
+- Docker Compose instalado (geralmente vem com Docker Desktop)
+
+##### 2. Configurar Variáveis de Ambiente
+
+```bash
+# Copiar exemplo de .env para Docker
+cp .env.docker.example .env
+
+# Editar com seus valores
+nano .env  # ou vim, gedit, code, etc.
+```
+
+Preencha obrigatoriamente:
+- `OPENAI_API_KEY` - Sua chave da OpenAI
+- `TELEGRAM_BOT_TOKEN` - Token do BotFather
+- `BOT_MODE` - "polling" (desenvolvimento) ou "webhook" (produção)
+
+##### 3. Criar Diretório de Dados
+
+```bash
+# Criar diretório para persistência do banco de dados
+mkdir -p data
+```
+
+##### 4. Registrar Usuário (Primeira Vez)
+
+Antes de iniciar o bot, registre seu usuário:
+
+```bash
+# Build da imagem
+docker-compose build
+
+# Rodar setup de usuário
+docker-compose run --rm financas-bot python setup_telegram_user.py SEU_TELEGRAM_ID "Seu Nome"
+
+# Exemplo:
+docker-compose run --rm financas-bot python setup_telegram_user.py 974597459 "Leandro"
+```
+
+##### 5. Iniciar o Bot com Docker Compose
+
+```bash
+# Iniciar em background
+docker-compose up -d
+
+# Ver logs em tempo real
+docker-compose logs -f
+
+# Verificar status
+docker-compose ps
+```
+
+##### 6. Gerenciar o Container
+
+```bash
+# Parar o bot
+docker-compose down
+
+# Reiniciar o bot
+docker-compose restart
+
+# Ver logs (últimas 100 linhas)
+docker-compose logs --tail=100
+
+# Acompanhar logs
+docker-compose logs -f financas-bot
+
+# Executar comandos dentro do container
+docker-compose exec financas-bot bash
+```
+
+##### 7. Build Manual (Alternativa ao Docker Compose)
+
+```bash
+# Build da imagem
+docker build -t financas-ia-bot .
+
+# Executar em modo polling (desenvolvimento)
+docker run -d \
+  --name financas-bot \
+  --env-file .env \
+  -v $(pwd)/data:/app/data \
+  financas-ia-bot
+
+# Executar em modo webhook (produção)
+docker run -d \
+  --name financas-bot \
+  --env-file .env \
+  -e BOT_MODE=webhook \
+  -p 8000:8000 \
+  -v $(pwd)/data:/app/data \
+  financas-ia-bot
+
+# Ver logs
+docker logs -f financas-bot
+
+# Parar container
+docker stop financas-bot
+
+# Remover container
+docker rm financas-bot
+```
+
+##### 8. Volumes e Persistência
+
+Os dados do banco são armazenados no diretório `./data/`:
+- `data/financas.db` - Banco de dados principal
+- `data/checkpoints.db` - Estados do LangGraph
+
+**⚠️ Backup:** Faça backup regular do diretório `data/`
+
+```bash
+# Backup manual
+tar -czf backup-$(date +%Y%m%d).tar.gz data/
+
+# Restaurar backup
+tar -xzf backup-20260519.tar.gz
+```
+
+##### 9. Troubleshooting Docker
+
+**Container não inicia:**
+```bash
+# Ver logs de erro
+docker-compose logs financas-bot
+
+# Verificar variáveis de ambiente
+docker-compose config
+```
+
+**Banco de dados travado:**
+```bash
+# Parar container
+docker-compose down
+
+# Limpar locks do SQLite
+rm -f data/*.db-shm data/*.db-wal
+
+# Reiniciar
+docker-compose up -d
+```
+
+**Reconstruir imagem após mudanças:**
+```bash
+docker-compose build --no-cache
+docker-compose up -d
+```
+
 ### 9. Testar o Bot
 
 1. Abra o Telegram
@@ -214,6 +369,14 @@ financas-ia/
 ├── services/                  # Service Layer
 │   └── expense_service.py     # Lógica de negócio
 ├── tests/                     # Testes
+├── data/                      # Dados persistentes (volumes)
+│   ├── financas.db            # Banco principal
+│   └── checkpoints.db         # Estados LangGraph
+├── Dockerfile                 # Container image
+├── docker-compose.yml         # Orquestração Docker
+├── docker-entrypoint.sh       # Script de inicialização
+├── .dockerignore              # Arquivos ignorados no build
+├── .env.docker.example        # Exemplo de .env para Docker
 ├── bot_control.sh            # Script de controle do bot
 ├── main_telegram_polling.py  # Entrypoint polling
 ├── setup_telegram_user.py    # Setup de usuários
@@ -343,9 +506,41 @@ pytest tests/test_multitenant_isolation.py -v
 
 ## 🚀 Deploy (Produção)
 
-Para deploy em produção com webhook, consulte:
+### Docker (Recomendado)
+
+A aplicação está containerizada e pronta para deploy:
+
+```bash
+# Configurar .env com BOT_MODE=webhook
+echo "BOT_MODE=webhook" >> .env
+
+# Build e deploy
+docker-compose up -d
+
+# Verificar saúde
+docker-compose ps
+curl http://localhost:8000/health
+```
+
+**Requisitos para webhook:**
+- Domínio público com HTTPS
+- Configurar `TELEGRAM_WEBHOOK_URL` no `.env`
+- Configurar `TELEGRAM_WEBHOOK_SECRET` (segredo único)
+- Expor porta 8000 (ou configurar reverse proxy)
+
+### Deploy Manual
+
+Para deploy em produção sem Docker, consulte:
 - `README_TELEGRAM.md` - Guia completo de integração Telegram
 - `api/webhook.py` - Implementação do webhook FastAPI
+
+### Plataformas Recomendadas
+
+- **AWS EC2** - Máquinas virtuais com Docker
+- **DigitalOcean Droplets** - Deploy simples com Docker
+- **Railway** - Deploy automático via Git
+- **Fly.io** - Containerização nativa
+- **Render** - Deploy gratuito (tier limitado)
 
 ## 📝 Licença
 
