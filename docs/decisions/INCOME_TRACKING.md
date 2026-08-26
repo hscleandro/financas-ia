@@ -196,8 +196,39 @@ As seguintes funcionalidades foram explicitamente deixadas fora do MVP desta fea
 
 ---
 
-## 5. Rastreabilidade
+## 6. Status de Implementação
 
-- Branch: `feature/income-tracking`
-- Base: `develop`
-- Documento criado em: `docs/decisions/INCOME_TRACKING.md`
+| Passo | Status | Commit |
+|---|---|---|
+| Migrations 0008/0009 | ✅ Concluído | `e124388` |
+| IncomeService + schemas | ✅ Concluído | `fe2dcb1` |
+| Tools do agente + handler | ✅ Concluído | `c15a2d7` |
+| Prompt Telegram | ✅ Concluído | `038041b` |
+| Testes | ✅ Concluído | `e1b88cc` |
+| setup_database atualizado | ✅ Concluído | `8c58666` |
+
+### Validação
+
+```bash
+pytest -v
+# 51 passed in 5.85s
+```
+
+### Bot em produção
+
+Bot reiniciado em modo polling após aplicação das migrations. Usuário `Leandro (974597459)` cadastrado e pronto para testes.
+
+---
+
+## 7. Próximos Passos Sugeridos
+
+- Testar no Telegram mensagens como:
+  - "Recebi 5000 de salário"
+  - "Quanto ganhei esse mês?"
+  - "Resumo dos meus ganhos"
+- Considerar adicionar relatório consolidado (ganhos - despesas) no futuro
+- Documentar a feature no README.md
+
+---
+
+**Última atualização:** 2026-08-26 — implementação concluída e testada
