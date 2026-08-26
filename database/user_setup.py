@@ -5,8 +5,6 @@ DA-027: Seeds is_system=1 replicados na criação de cada usuário.
 import sqlite3
 from typing import Optional
 
-from database.setup import CATEGORIES, PAYMENT_METHODS
-
 
 def create_user(
     conn: sqlite3.Connection,

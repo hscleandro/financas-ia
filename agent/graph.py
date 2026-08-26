@@ -8,7 +8,6 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 from typing_extensions import TypedDict
 
-from agent.prompts import get_system_prompt
 from agent.prompts_telegram import get_telegram_system_prompt
 from config import settings
 
@@ -123,13 +122,12 @@ async def guardrail_node(state: AgentState) -> dict:
     return {"messages": stubs + [AIMessage(content=_BULK_DELETE_MSG)]}
 
 
-def build_graph(tools: list, checkpointer=None, use_telegram_prompt: bool = True):
-    """Build LangGraph com opção de usar prompt otimizado para Telegram.
+def build_graph(tools: list, checkpointer=None):
+    """Build LangGraph com prompt otimizado para Telegram.
 
     Args:
         tools: Lista de tools do LangChain
         checkpointer: AsyncSqliteSaver para persistência
-        use_telegram_prompt: Se True, usa prompt otimizado para Telegram (padrão)
     """
     llm = ChatOpenAI(
         model=settings.openai_model,
@@ -138,8 +136,7 @@ def build_graph(tools: list, checkpointer=None, use_telegram_prompt: bool = True
     )
     llm_with_tools = llm.bind_tools(tools)
 
-    # Usar prompt otimizado para Telegram por padrão
-    system_prompt = get_telegram_system_prompt() if use_telegram_prompt else get_system_prompt()
+    system_prompt = get_telegram_system_prompt()
 
     async def agent_node(state: AgentState) -> dict:
         trimmed = trim_messages(

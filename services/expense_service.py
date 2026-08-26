@@ -1,7 +1,4 @@
-"""ExpenseService — lógica de negócio de gastos, escopo por user_id.
-
-Refactored de mcp_server/server.py para produção web multi-tenant.
-"""
+"""ExpenseService — lógica de negócio de gastos, escopo por user_id."""
 import hashlib
 import json
 import logging

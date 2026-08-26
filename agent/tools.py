@@ -1,8 +1,7 @@
 """Constrói LangChain tools a partir do ExpenseService.
 
-Substitui o MultiServerMCPClient — cada tool é um wrapper sobre o service.
+Cada tool é um wrapper sobre o service.
 """
-from datetime import date
 from typing import Optional
 
 from langchain_core.tools import tool

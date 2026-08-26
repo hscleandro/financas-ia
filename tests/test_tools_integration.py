@@ -2,17 +2,23 @@
 
 Valida que as tools LangChain funcionam corretamente.
 """
+import pytest
+
 from agent.tools import build_tools
 from database.setup import get_connection
 from services.expense_service import ExpenseService
 
 
-def test_tools_integration():
-    """Testa que as tools construídas funcionam."""
+@pytest.fixture
+def tools(test_db):
     conn = get_connection()
     service = ExpenseService(conn, user_id=None)
-    tools = build_tools(service)
+    yield build_tools(service)
+    conn.close()
 
+
+def test_tools_integration(tools):
+    """Testa que as tools construídas funcionam."""
     print("=" * 60)
     print("Teste de Integração: agent/tools.py")
     print("=" * 60)
@@ -76,8 +82,6 @@ def test_tools_integration():
     print("\n" + "=" * 60)
     print("✅ INTEGRAÇÃO DE TOOLS FUNCIONANDO!")
     print("=" * 60)
-
-    conn.close()
 
 
 if __name__ == "__main__":

@@ -13,8 +13,6 @@ Usage:
 import asyncio
 import logging
 
-from alembic import command
-from alembic.config import Config
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from telegram import Update
 from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters

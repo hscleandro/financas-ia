@@ -9,7 +9,6 @@ Cobre:
 
 Adicionais para cobrir confirm_node routing e operações não-destrutivas.
 """
-
 import asyncio
 import json
 import sys
@@ -27,7 +26,8 @@ from agent.graph import (
     guardrail_node,
     should_call_tools,
 )
-from mcp_server.server import create_category, delete_expense, update_expense
+from database.setup import get_connection
+from services.expense_service import ExpenseService
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -51,6 +51,14 @@ def _update_call(expense_id: int, tc_id: str = "tc1") -> dict:
 
 def _safe_call(tc_id: str = "tc1") -> dict:
     return {"name": "query_expenses", "id": tc_id, "args": {"keyword": "uber"}}
+
+
+@pytest.fixture
+def service(test_db):
+    """Fixture que retorna um ExpenseService com conexão aberta."""
+    conn = get_connection()
+    yield ExpenseService(conn, user_id=None)
+    conn.close()
 
 
 # ─── DT-007 — Teste 1: guardrail bloqueia delete paralelo ─────────────────────
@@ -131,23 +139,29 @@ def test_guardrail_node_stubs_preserve_tool_call_ids():
     assert stub_ids == ids
 
 
-# ─── DT-007 — Teste 4: MCP server rejeita confirmed=False ────────────────────
+# ─── DT-007 — Teste 4: Service Layer rejeita confirmed=False ─────────────────
 
-def test_delete_without_confirmed_blocked(test_db, inserted_expense):
+def test_delete_without_confirmed_blocked(service):
     """delete_expense(confirmed=False) deve retornar erro sem tocar no banco."""
-    result = delete_expense(expense_id=inserted_expense, confirmed=False)
+    result = service.record_expense(55.0, "almoço", "Alimentação", "dinheiro", "2026-05-10")
+    expense_id = result["id"]
+
+    result = service.delete_expense(expense_id=expense_id, confirmed=False)
     assert result["tipo"] == "nao_confirmado"
 
 
-def test_update_without_confirmed_blocked(test_db, inserted_expense):
+def test_update_without_confirmed_blocked(service):
     """update_expense(confirmed=False) deve retornar erro sem tocar no banco."""
-    result = update_expense(expense_id=inserted_expense, confirmed=False, amount=999.0)
+    result = service.record_expense(55.0, "almoço", "Alimentação", "dinheiro", "2026-05-10")
+    expense_id = result["id"]
+
+    result = service.update_expense(expense_id=expense_id, confirmed=False, amount=999.0)
     assert result["tipo"] == "nao_confirmado"
 
 
-def test_create_category_without_confirmed_blocked(test_db):
+def test_create_category_without_confirmed_blocked(service):
     """create_category(confirmed=False) deve retornar erro."""
-    result = create_category("Nova Categoria", confirmed=False)
+    result = service.create_category("Nova Categoria", confirmed=False)
     assert result["tipo"] == "nao_confirmado"
 
 

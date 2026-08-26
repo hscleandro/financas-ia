@@ -3,7 +3,6 @@
 Lógica de negócio usada tanto em webhook (FastAPI) quanto polling.
 """
 import logging
-from typing import Optional
 
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -12,11 +11,10 @@ from telegram import Bot
 
 from agent.graph import build_graph
 from agent.tools import build_tools
-from config import settings
 from database.setup import get_connection
 from database.user_setup import get_user_by_telegram_id
 from services.expense_service import ExpenseService
-from bot.keyboards import get_confirmation_keyboard, format_expense_for_confirmation
+from bot.keyboards import get_confirmation_keyboard
 
 logger = logging.getLogger(__name__)
 

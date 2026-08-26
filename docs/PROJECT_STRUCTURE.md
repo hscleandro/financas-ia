@@ -8,10 +8,8 @@ Organização do código e documentação do financas-ia.
 financas-ia/
 ├── agent/                      # Agente LangGraph
 │   ├── graph.py               # Grafo de estados e nós
-│   ├── prompts.py             # System prompt original
 │   ├── prompts_telegram.py    # System prompt otimizado para Telegram
-│   ├── tools.py               # LangChain tools
-│   └── guardrails.py          # Validações de segurança
+│   └── tools.py               # LangChain tools
 │
 ├── api/                       # API FastAPI (webhook produção)
 │   └── webhook.py             # Endpoint para webhook do Telegram
@@ -27,9 +25,6 @@ financas-ia/
 ├── migrations/                # Alembic migrations
 │   └── versions/              # Histórico de mudanças no schema
 │
-├── mcp_server/                # MCP Server (MVP 1-2, legacy)
-│   └── server.py              # Servidor MCP original
-│
 ├── models/                    # Modelos de dados
 │   └── schemas.py             # Pydantic schemas
 │
@@ -42,8 +37,8 @@ financas-ia/
 │   ├── test_tools_integration.py
 │   ├── test_multitenant_isolation.py
 │   ├── test_guardrails.py
-│   ├── test_mcp_server.py
-│   └── test_*.py
+│   ├── test_query_expenses.py
+│   └── test_telegram_connection.py
 │
 ├── data/                      # Dados persistentes (volumes)
 │   ├── financas.db            # Banco de dados principal
@@ -60,7 +55,6 @@ financas-ia/
 ## 📄 Arquivos na Raiz
 
 ### Entrypoints
-- **main.py** - Entrypoint MCP Server (MVP 1-2)
 - **main_telegram_polling.py** - Entrypoint bot Telegram (modo polling)
 - **setup_telegram_user.py** - Script de setup de usuários
 
@@ -68,6 +62,7 @@ financas-ia/
 - **config.py** - Configurações via Pydantic Settings
 - **requirements.txt** - Dependências Python
 - **.env** - Variáveis de ambiente (gitignored)
+- **.env.example** - Template .env para desenvolvimento
 - **.env.docker.example** - Template .env para Docker
 
 ### Docker
@@ -93,7 +88,7 @@ financas-ia/
 - **CHANGELOG_SPRINT5.md** - Mudanças da Sprint 5
 
 ### Diagramas (docs/diagrams/)
-- Diagramas PlantUML de arquitetura dos MVPs 1-2
+- Diagramas PlantUML de casos de uso
 
 ### Planejamento (docs/planning/)
 **Atenção:** Este diretório é ignorado pelo git (.gitignore)
@@ -109,10 +104,9 @@ financas-ia/
 - **test_multitenant_isolation.py** - Testa isolamento de dados
 
 ### Por Feature
-- **test_guardrails.py** - Testa proteções de segurança
-- **test_mcp_server.py** - Testa MCP Server (legacy)
+- **test_guardrails.py** - Testa proteções de segurança do grafo
 - **test_query_expenses.py** - Testa consultas
-- **test_da016_manual.py** - Testes manuais DA-016
+- **test_telegram_connection.py** - Testa conexão com Telegram
 
 ### Configuração
 - **conftest.py** - Fixtures compartilhadas do pytest
@@ -130,7 +124,7 @@ financas-ia/
 ## 🔒 Arquivos Ignorados (.gitignore)
 
 ### Ambiente
-- `.env`, `.env.example` - Variáveis de ambiente
+- `.env` - Variáveis de ambiente
 - `venv/`, `.venv/` - Ambientes virtuais Python
 
 ### Banco de Dados
@@ -209,4 +203,4 @@ docker-compose down
 
 ---
 
-**Última atualização:** Sprint 5 - Estabilização (MVP 3)
+**Última atualização:** Refatoração MVP 3
