@@ -59,7 +59,7 @@ def setup_database() -> None:
                 method       TEXT      NOT NULL DEFAULT 'dinheiro',
                 expense_date DATE      NOT NULL DEFAULT CURRENT_DATE,
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                hash         TEXT      NOT NULL UNIQUE,
+                hash         TEXT      NOT NULL,
                 deleted_at   TIMESTAMP DEFAULT NULL
             );
 
@@ -90,7 +90,7 @@ def setup_database() -> None:
                 category      TEXT      NOT NULL REFERENCES income_categories(name),
                 income_date   DATE      NOT NULL DEFAULT CURRENT_DATE,
                 created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                hash          TEXT      NOT NULL UNIQUE,
+                hash          TEXT      NOT NULL,
                 deleted_at    TIMESTAMP DEFAULT NULL
             );
         """)

@@ -37,7 +37,7 @@ CREATE TABLE incomes (
     category      TEXT      NOT NULL REFERENCES income_categories(name),
     income_date   DATE      NOT NULL DEFAULT CURRENT_DATE,
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    hash          TEXT      NOT NULL UNIQUE,
+    hash          TEXT      NOT NULL,
     deleted_at    TIMESTAMP DEFAULT NULL
 );
 ```

@@ -105,6 +105,7 @@ class ExpenseService:
         category: str,
         method: str,
         expense_date: Optional[str] = None,
+        force: bool = False,
     ) -> dict:
         """Registra um gasto no banco de dados financeiro pessoal.
 
@@ -114,9 +115,12 @@ class ExpenseService:
             category: Categoria do gasto (deve ser uma das categorias válidas)
             method: Método de pagamento — use list_payment_methods para ver os disponíveis
             expense_date: Data do gasto no formato YYYY-MM-DD (padrão: hoje)
+            force: Se True, ignora detecção de duplicata e insere mesmo assim
 
         Returns:
-            dict com id e campos do gasto, ou {"error": ..., "tipo": ...}
+            dict com id e campos do gasto,
+            ou {"warning": ..., "tipo": "duplicata", ...} se houver possível duplicata,
+            ou {"error": ..., "tipo": ...} em caso de erro de validação
         """
         valid_categories = self._get_valid_categories()
         if category not in valid_categories:
@@ -145,59 +149,80 @@ class ExpenseService:
 
         expense_hash = self._compute_hash(expense.amount, expense.description, expense.expense_date)
 
-        try:
-            if self.user_id is not None:
-                # Multi-tenant: inclui user_id
-                cursor = self.conn.execute(
-                    """
-                    INSERT INTO expenses (user_id, amount, description, category, method, expense_date, hash)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        self.user_id,
-                        expense.amount,
-                        expense.description,
-                        expense.category,
-                        expense.method,
-                        expense.expense_date.isoformat(),
-                        expense_hash,
-                    ),
+        # Detecção de possível duplicata
+        if not force:
+            duplicate = self._find_duplicate(expense_hash)
+            if duplicate:
+                logger.warning(
+                    "Possível duplicata detectada: %s · R$%.2f · %s",
+                    expense.description,
+                    expense.amount,
+                    expense.expense_date,
                 )
-            else:
-                # Single-user (compatibilidade Sprint 1)
-                cursor = self.conn.execute(
-                    """
-                    INSERT INTO expenses (amount, description, category, method, expense_date, hash)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        expense.amount,
-                        expense.description,
-                        expense.category,
-                        expense.method,
-                        expense.expense_date.isoformat(),
-                        expense_hash,
-                    ),
-                )
-            self.conn.commit()
-            expense_id = cursor.lastrowid
+                return {
+                    "warning": "Já existe um gasto idêntico. Deseja cadastrar mesmo assim?",
+                    "tipo": "duplicata",
+                    "record": duplicate,
+                }
 
-            return {
-                "id": expense_id,
-                "amount": expense.amount,
-                "description": expense.description,
-                "category": expense.category,
-                "method": expense.method,
-                "expense_date": expense.expense_date.isoformat(),
-            }
-        except sqlite3.IntegrityError:
-            logger.warning(
-                "Duplicata detectada: %s · R$%.2f · %s",
-                expense.description,
-                expense.amount,
-                expense.expense_date,
+        if self.user_id is not None:
+            cursor = self.conn.execute(
+                """
+                INSERT INTO expenses (user_id, amount, description, category, method, expense_date, hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self.user_id,
+                    expense.amount,
+                    expense.description,
+                    expense.category,
+                    expense.method,
+                    expense.expense_date.isoformat(),
+                    expense_hash,
+                ),
             )
-            return {"error": "Gasto duplicado: já existe um registro idêntico.", "tipo": "duplicata"}
+        else:
+            cursor = self.conn.execute(
+                """
+                INSERT INTO expenses (amount, description, category, method, expense_date, hash)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    expense.amount,
+                    expense.description,
+                    expense.category,
+                    expense.method,
+                    expense.expense_date.isoformat(),
+                    expense_hash,
+                ),
+            )
+        self.conn.commit()
+        expense_id = cursor.lastrowid
+
+        return {
+            "id": expense_id,
+            "amount": expense.amount,
+            "description": expense.description,
+            "category": expense.category,
+            "method": expense.method,
+            "expense_date": expense.expense_date.isoformat(),
+        }
+
+    def _find_duplicate(self, expense_hash: str) -> dict | None:
+        """Busca registro ativo com mesmo hash para o usuário atual."""
+        if self.user_id is not None:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date "
+                "FROM expenses WHERE hash = ? AND deleted_at IS NULL AND user_id = ?",
+                (expense_hash, self.user_id),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date "
+                "FROM expenses WHERE hash = ? AND deleted_at IS NULL",
+                (expense_hash,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def query_expenses(
         self,

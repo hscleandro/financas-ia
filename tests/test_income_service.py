@@ -28,10 +28,18 @@ class TestRecordIncome:
         result = income_service.record_income(1000.0, "Freela", "Freela")
         assert result["income_date"] == date.today().isoformat()
 
-    def test_duplicate_rejected(self, income_service):
+    def test_duplicate_returns_warning(self, income_service):
         income_service.record_income(1000.0, "Freela", "Freela", "2026-08-01")
         result = income_service.record_income(1000.0, "Freela", "Freela", "2026-08-01")
         assert result.get("tipo") == "duplicata"
+        assert "warning" in result
+        assert "record" in result
+
+    def test_duplicate_force_inserts(self, income_service):
+        income_service.record_income(1000.0, "Freela", "Freela", "2026-08-01")
+        result = income_service.record_income(1000.0, "Freela", "Freela", "2026-08-01", force=True)
+        assert "id" in result
+        assert result["amount"] == 1000.0
 
     def test_invalid_category(self, income_service):
         result = income_service.record_income(1000.0, "Teste", "CategoriaInexistente")

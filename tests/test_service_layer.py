@@ -75,5 +75,45 @@ def test_service_layer(service):
     print("=" * 60)
 
 
+def test_duplicate_expense_returns_warning(service):
+    service.record_expense(
+        amount=55.0,
+        description="Almoço duplicata",
+        category="Alimentação",
+        method="dinheiro",
+        expense_date="2026-05-19",
+    )
+    result = service.record_expense(
+        amount=55.0,
+        description="Almoço duplicata",
+        category="Alimentação",
+        method="dinheiro",
+        expense_date="2026-05-19",
+    )
+    assert result.get("tipo") == "duplicata"
+    assert "warning" in result
+    assert "record" in result
+
+
+def test_duplicate_expense_force_inserts(service):
+    service.record_expense(
+        amount=55.0,
+        description="Almoço duplicata",
+        category="Alimentação",
+        method="dinheiro",
+        expense_date="2026-05-19",
+    )
+    result = service.record_expense(
+        amount=55.0,
+        description="Almoço duplicata",
+        category="Alimentação",
+        method="dinheiro",
+        expense_date="2026-05-19",
+        force=True,
+    )
+    assert "id" in result
+    assert result["amount"] == 55.0
+
+
 if __name__ == "__main__":
     test_service_layer()
