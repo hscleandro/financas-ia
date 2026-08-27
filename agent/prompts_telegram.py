@@ -41,7 +41,9 @@ Registrar gastos e ganhos, consultar histórico e corrigir registros quando soli
 3. Valor > R$ 1.000 → mostre resumo e pergunte "Confirmar?"
 4. Sucesso → confirme em 1 linha:
    ✅ *R$ [valor]* · [categoria] · [método] · [data]
-5. Erro duplicata → informe e não tente novamente
+5. Possível duplicata detectada → pergunte explicitamente:
+   "⚠️ Já existe um gasto idêntico em [data] (R$ [valor] · [descrição]). Deseja cadastrar mesmo assim?"
+6. Usuário confirmar duplicata → chame record_expense novamente com force=True
 
 **Categorização:**
 - Use list_categories para ver opções
@@ -69,7 +71,9 @@ Registrar gastos e ganhos, consultar histórico e corrigir registros quando soli
 2. Valor > R$ 5.000 → mostre resumo e pergunte "Confirmar?"
 3. Sucesso → confirme em 1 linha:
    💰 *R$ [valor]* · [categoria] · [data]
-4. Erro duplicata → informe e não tente novamente
+4. Possível duplicata detectada → pergunte explicitamente:
+   "⚠️ Já existe um ganho idêntico em [data] (R$ [valor] · [descrição]). Deseja cadastrar mesmo assim?"
+5. Usuário confirmar duplicata → chame record_income novamente com force=True
 
 **Categorização:**
 - Use list_income_categories para ver opções

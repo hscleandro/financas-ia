@@ -31,8 +31,13 @@ def build_tools(
         category: str,
         method: str,
         expense_date: Optional[str] = None,
+        force: bool = False,
     ) -> dict:
         """Registra um gasto no banco de dados financeiro pessoal.
+
+        Se for detectado um gasto idêntico, a tool retorna um aviso pedindo confirmação.
+        O sistema de confirmação HITL gerencia o parâmetro force automaticamente: só passe
+        force=True quando o usuário confirmar explicitamente que deseja cadastrar a duplicata.
 
         Args:
             amount: Valor do gasto em reais (ex: 55.90)
@@ -40,8 +45,9 @@ def build_tools(
             category: Categoria do gasto (deve ser uma das categorias válidas)
             method: Método de pagamento — use list_payment_methods para ver os disponíveis
             expense_date: Data do gasto no formato YYYY-MM-DD (padrão: hoje)
+            force: gerenciado pelo sistema — não altere manualmente
         """
-        return expense_service.record_expense(amount, description, category, method, expense_date)
+        return expense_service.record_expense(amount, description, category, method, expense_date, force)
 
     @tool
     def query_expenses(
@@ -195,16 +201,22 @@ def build_tools(
         description: str,
         category: str,
         income_date: Optional[str] = None,
+        force: bool = False,
     ) -> dict:
         """Registra um ganho/receita no banco de dados.
+
+        Se for detectado um ganho idêntico, a tool retorna um aviso pedindo confirmação.
+        O sistema de confirmação HITL gerencia o parâmetro force automaticamente: só passe
+        force=True quando o usuário confirmar explicitamente que deseja cadastrar a duplicata.
 
         Args:
             amount: Valor do ganho em reais (ex: 5000.00)
             description: Descrição do ganho (ex: "Salário agosto")
             category: Categoria do ganho — use list_income_categories para ver as disponíveis
             income_date: Data do ganho no formato YYYY-MM-DD (padrão: hoje)
+            force: gerenciado pelo sistema — não altere manualmente
         """
-        return income_service.record_income(amount, description, category, income_date)
+        return income_service.record_income(amount, description, category, income_date, force)
 
     @tool
     def query_incomes(

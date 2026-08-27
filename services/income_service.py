@@ -78,6 +78,7 @@ class IncomeService:
         description: str,
         category: str,
         income_date: Optional[str] = None,
+        force: bool = False,
     ) -> dict:
         """Registra um ganho no banco de dados.
 
@@ -86,9 +87,12 @@ class IncomeService:
             description: Descrição do ganho (ex: "Salário agosto")
             category: Categoria do ganho (deve ser uma das válidas)
             income_date: Data do ganho no formato YYYY-MM-DD (padrão: hoje)
+            force: Se True, ignora detecção de duplicata e insere mesmo assim
 
         Returns:
-            dict com id e campos do ganho, ou {"error": ..., "tipo": ...}
+            dict com id e campos do ganho,
+            ou {"warning": ..., "tipo": "duplicata", ...} se houver possível duplicata,
+            ou {"error": ..., "tipo": ...} em caso de erro de validação
         """
         valid_categories = self._get_valid_categories()
         if category not in valid_categories:
@@ -109,39 +113,61 @@ class IncomeService:
 
         income_hash = self._compute_hash(income.amount, income.description, income.income_date)
 
-        try:
-            cursor = self.conn.execute(
-                """
-                INSERT INTO incomes (user_id, amount, description, category, income_date, hash)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    self.user_id,
-                    income.amount,
+        if not force:
+            duplicate = self._find_duplicate(income_hash)
+            if duplicate:
+                logger.warning(
+                    "Possível duplicata detectada: %s · R$%.2f · %s",
                     income.description,
-                    income.category,
-                    income.income_date.isoformat(),
-                    income_hash,
-                ),
-            )
-            self.conn.commit()
-            income_id = cursor.lastrowid
+                    income.amount,
+                    income.income_date,
+                )
+                return {
+                    "warning": "Já existe um ganho idêntico. Deseja cadastrar mesmo assim?",
+                    "tipo": "duplicata",
+                    "record": duplicate,
+                }
 
-            return {
-                "id": income_id,
-                "amount": income.amount,
-                "description": income.description,
-                "category": income.category,
-                "income_date": income.income_date.isoformat(),
-            }
-        except sqlite3.IntegrityError:
-            logger.warning(
-                "Duplicata detectada: %s · R$%.2f · %s",
-                income.description,
+        cursor = self.conn.execute(
+            """
+            INSERT INTO incomes (user_id, amount, description, category, income_date, hash)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self.user_id,
                 income.amount,
-                income.income_date,
-            )
-            return {"error": "Ganho duplicado: já existe um registro idêntico.", "tipo": "duplicata"}
+                income.description,
+                income.category,
+                income.income_date.isoformat(),
+                income_hash,
+            ),
+        )
+        self.conn.commit()
+        income_id = cursor.lastrowid
+
+        return {
+            "id": income_id,
+            "amount": income.amount,
+            "description": income.description,
+            "category": income.category,
+            "income_date": income.income_date.isoformat(),
+        }
+
+    def _find_duplicate(self, income_hash: str) -> dict | None:
+        """Busca registro ativo com mesmo hash para o usuário atual."""
+        if self.user_id is not None:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, income_date "
+                "FROM incomes WHERE hash = ? AND deleted_at IS NULL AND user_id = ?",
+                (income_hash, self.user_id),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, income_date "
+                "FROM incomes WHERE hash = ? AND deleted_at IS NULL",
+                (income_hash,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def query_incomes(
         self,
