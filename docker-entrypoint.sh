@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# Se um comando foi passado explicitamente (ex: setup_telegram_user.py),
+# executa esse comando em vez de iniciar o bot.
+if [ $# -gt 0 ]; then
+    exec "$@"
+fi
+
 echo "🚀 Iniciando Finanças IA Bot..."
 echo "📂 Diretório: $(pwd)"
 echo "🔧 Modo: ${BOT_MODE}"
