@@ -42,8 +42,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
-# Volumes nomeados (alternativa aos bind mounts)
-volumes:
-  bot-data:
-    driver: local

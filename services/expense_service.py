@@ -1,102 +1,56 @@
 """ExpenseService — lógica de negócio de gastos, escopo por user_id."""
-import hashlib
-import json
-import logging
-import re
 import sqlite3
-import unicodedata
 from datetime import date
 from typing import Optional
 
 from models.schemas import ExpenseCreate
-
-logger = logging.getLogger(__name__)
+from services._base import (
+    compute_hash,
+    create_custom_category,
+    get_valid_categories,
+    log_audit,
+    normalize_description,
+    row_to_dict,
+    soft_delete,
+    validate_method_name,
+)
 
 
 class ExpenseService:
-    """Service de gestão de gastos com escopo de user_id.
-
-    Args:
-        conn: Conexão SQLite (será Connection do asyncpg no Sprint 2)
-        user_id: ID do usuário (opcional no Sprint 1 para compatibilidade)
-    """
+    """Service de gestão de gastos com escopo de user_id."""
 
     def __init__(self, conn: sqlite3.Connection, user_id: Optional[int] = None):
         self.conn = conn
         self.user_id = user_id
 
-    # ─── Utilitários privados ───────────────────────────────────────────
-
     def _get_valid_categories(self) -> set[str]:
-        """Retorna categorias disponíveis — system + custom do usuário."""
-        if self.user_id is not None:
-            # Multi-tenant: system (user_id NULL) + categorias do usuário
-            query = "SELECT name FROM categories WHERE user_id IS NULL OR user_id = ?"
-            rows = self.conn.execute(query, (self.user_id,)).fetchall()
-        else:
-            # Single-user (compatibilidade Sprint 1)
-            query = "SELECT name FROM categories"
-            rows = self.conn.execute(query).fetchall()
-        return {row["name"] for row in rows}
+        return get_valid_categories(self.conn, "categories", self.user_id)
 
     def _get_valid_methods(self) -> set[str]:
         """Retorna métodos de pagamento disponíveis — system + custom do usuário."""
         if self.user_id is not None:
-            # Multi-tenant: system (user_id NULL) + métodos do usuário
             query = "SELECT name FROM payment_methods WHERE user_id IS NULL OR user_id = ?"
             rows = self.conn.execute(query, (self.user_id,)).fetchall()
         else:
-            # Single-user (compatibilidade Sprint 1)
             query = "SELECT name FROM payment_methods"
             rows = self.conn.execute(query).fetchall()
         return {row["name"] for row in rows}
 
-    @staticmethod
-    def _validate_category_name(name: str) -> tuple[str, str | None]:
-        """Normaliza e valida um nome de categoria. Retorna (nome_normalizado, erro_ou_None)."""
-        clean = name.strip().title()
-        if len(clean) < 2:
-            return clean, "Nome da categoria deve ter pelo menos 2 caracteres."
-        if len(clean) > 30:
-            return clean, "Nome da categoria não pode exceder 30 caracteres."
-        if not all(c == " " or c == "-" or unicodedata.category(c).startswith("L") for c in clean):
-            return clean, "Nome da categoria deve conter apenas letras, espaços e hífens."
-        return clean, None
-
-    @staticmethod
-    def _validate_method_name(name: str) -> tuple[str, str | None]:
-        """Normaliza e valida um nome de método de pagamento. Retorna (nome_normalizado, erro_ou_None)."""
-        clean = name.strip().lower()
-        if len(clean) < 2:
-            return clean, "Nome do método deve ter pelo menos 2 caracteres."
-        if len(clean) > 30:
-            return clean, "Nome do método não pode exceder 30 caracteres."
-        if not all(c == " " or c == "-" or unicodedata.category(c).startswith("L") for c in clean):
-            return clean, "Nome do método deve conter apenas letras, espaços e hífens."
-        return clean, None
-
-    @staticmethod
-    def _normalize_description(text: str) -> str:
-        """Remove acentos e normaliza para busca case-insensitive."""
-        text = text.lower().strip()
-        text = unicodedata.normalize("NFD", text)
-        text = "".join(c for c in text if unicodedata.category(c) != "Mn")
-        text = re.sub(r"\s+", " ", text)
-        return text
-
-    @staticmethod
-    def _compute_hash(amount: float, description: str, expense_date: date) -> str:
-        """Gera hash único para detecção de duplicatas."""
-        normalized = ExpenseService._normalize_description(description)
-        raw = f"{amount:.2f}|{normalized}|{expense_date.isoformat()}"
-        return hashlib.sha256(raw.encode()).hexdigest()
-
-    @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> dict:
-        """Converte Row em dict, transformando date em string."""
-        return {k: str(v) if isinstance(v, date) else v for k, v in dict(row).items()}
-
-    # ─── Métodos públicos (business logic) ──────────────────────────────
+    def _find_duplicate(self, expense_hash: str) -> dict | None:
+        """Busca registro ativo com mesmo hash para o usuário atual."""
+        if self.user_id is not None:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date "
+                "FROM expenses WHERE hash = ? AND deleted_at IS NULL AND user_id = ?",
+                (expense_hash, self.user_id),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT id, amount, description, category, method, expense_date "
+                "FROM expenses WHERE hash = ? AND deleted_at IS NULL",
+                (expense_hash,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def record_expense(
         self,
@@ -107,21 +61,7 @@ class ExpenseService:
         expense_date: Optional[str] = None,
         force: bool = False,
     ) -> dict:
-        """Registra um gasto no banco de dados financeiro pessoal.
-
-        Args:
-            amount: Valor do gasto em reais (ex: 55.90)
-            description: Descrição do gasto (ex: "almoço no restaurante")
-            category: Categoria do gasto (deve ser uma das categorias válidas)
-            method: Método de pagamento — use list_payment_methods para ver os disponíveis
-            expense_date: Data do gasto no formato YYYY-MM-DD (padrão: hoje)
-            force: Se True, ignora detecção de duplicata e insere mesmo assim
-
-        Returns:
-            dict com id e campos do gasto,
-            ou {"warning": ..., "tipo": "duplicata", ...} se houver possível duplicata,
-            ou {"error": ..., "tipo": ...} em caso de erro de validação
-        """
+        """Registra um gasto no banco de dados financeiro pessoal."""
         valid_categories = self._get_valid_categories()
         if category not in valid_categories:
             return {
@@ -147,18 +87,11 @@ class ExpenseService:
         except Exception as e:
             return {"error": str(e), "tipo": "invalido"}
 
-        expense_hash = self._compute_hash(expense.amount, expense.description, expense.expense_date)
+        expense_hash = compute_hash(expense.amount, expense.description, expense.expense_date)
 
-        # Detecção de possível duplicata
         if not force:
             duplicate = self._find_duplicate(expense_hash)
             if duplicate:
-                logger.warning(
-                    "Possível duplicata detectada: %s · R$%.2f · %s",
-                    expense.description,
-                    expense.amount,
-                    expense.expense_date,
-                )
                 return {
                     "warning": "Já existe um gasto idêntico. Deseja cadastrar mesmo assim?",
                     "tipo": "duplicata",
@@ -208,22 +141,6 @@ class ExpenseService:
             "expense_date": expense.expense_date.isoformat(),
         }
 
-    def _find_duplicate(self, expense_hash: str) -> dict | None:
-        """Busca registro ativo com mesmo hash para o usuário atual."""
-        if self.user_id is not None:
-            row = self.conn.execute(
-                "SELECT id, amount, description, category, method, expense_date "
-                "FROM expenses WHERE hash = ? AND deleted_at IS NULL AND user_id = ?",
-                (expense_hash, self.user_id),
-            ).fetchone()
-        else:
-            row = self.conn.execute(
-                "SELECT id, amount, description, category, method, expense_date "
-                "FROM expenses WHERE hash = ? AND deleted_at IS NULL",
-                (expense_hash,),
-            ).fetchone()
-        return dict(row) if row else None
-
     def query_expenses(
         self,
         start_date: Optional[str] = None,
@@ -232,25 +149,13 @@ class ExpenseService:
         method: Optional[str] = None,
         keyword: Optional[str] = None,
     ) -> list[dict]:
-        """Consulta gastos ativos com filtros opcionais.
-
-        Args:
-            start_date: Data inicial no formato YYYY-MM-DD
-            end_date: Data final no formato YYYY-MM-DD
-            category: Filtrar por categoria específica
-            method: Filtrar por método de pagamento
-            keyword: Palavra-chave para busca textual na descrição
-
-        Returns:
-            Lista de dicts com dados dos gastos
-        """
+        """Consulta gastos ativos com filtros opcionais."""
         query = (
             "SELECT id, amount, description, category, method, expense_date, created_at "
             "FROM expenses WHERE deleted_at IS NULL"
         )
         params: list = []
 
-        # Multi-tenant: filtrar por user_id
         if self.user_id is not None:
             query += " AND user_id = ?"
             params.append(self.user_id)
@@ -273,12 +178,11 @@ class ExpenseService:
         rows = self.conn.execute(query, params).fetchall()
         results = [dict(row) for row in rows]
 
-        # Filtragem em Python para suporte correto a Unicode/acentos
         if keyword:
-            normalized_kw = self._normalize_description(keyword)
+            normalized_kw = normalize_description(keyword)
             results = [
                 r for r in results
-                if normalized_kw in self._normalize_description(r["description"])
+                if normalized_kw in normalize_description(r["description"])
             ]
 
         return results
@@ -289,16 +193,7 @@ class ExpenseService:
         end_date: str,
         group_by: str = "category",
     ) -> dict:
-        """Retorna resumo de gastos agrupados por dimensão.
-
-        Args:
-            start_date: Data inicial no formato YYYY-MM-DD
-            end_date: Data final no formato YYYY-MM-DD
-            group_by: Dimensão de agrupamento: 'category', 'method', 'day' ou 'month'
-
-        Returns:
-            dict com items agrupados e total_geral
-        """
+        """Retorna resumo de gastos agrupados por dimensão."""
         valid_groups = {"category", "method", "day", "month"}
         if group_by not in valid_groups:
             return {"error": f"group_by deve ser um de: {', '.join(valid_groups)}"}
@@ -310,7 +205,6 @@ class ExpenseService:
             "month": "strftime('%Y-%m', expense_date)",
         }[group_by]
 
-        # Multi-tenant: adicionar filtro user_id
         user_filter = " AND user_id = ?" if self.user_id is not None else ""
         params = [start_date, end_date]
         if self.user_id is not None:
@@ -349,39 +243,23 @@ class ExpenseService:
         }
 
     def list_categories(self) -> list[str]:
-        """Retorna a lista de categorias de gastos disponíveis."""
-        # Usa _get_valid_categories que já tem filtro de user_id
         return sorted(list(self._get_valid_categories()))
 
     def list_payment_methods(self) -> list[str]:
-        """Retorna a lista de métodos de pagamento disponíveis."""
-        # Usa _get_valid_methods que já tem filtro de user_id
         return sorted(list(self._get_valid_methods()))
 
     def create_payment_method(self, name: str, confirmed: bool) -> dict:
-        """Cria um novo método de pagamento definido pelo usuário.
-
-        ATENÇÃO: confirmed=True somente após confirmação explícita do usuário nessa mensagem.
-        Métodos do sistema (is_system=1) não podem ser substituídos.
-
-        Args:
-            name: Nome do novo método (será normalizado para lowercase)
-            confirmed: True apenas se o usuário confirmou explicitamente agora
-
-        Returns:
-            dict com {"created": True, "name": ...} ou {"error": ..., "tipo": ...}
-        """
+        """Cria um novo método de pagamento definido pelo usuário."""
         if not confirmed:
             return {
                 "error": "Criação de método requer confirmed=True. Mostre o nome ao usuário e aguarde confirmação.",
                 "tipo": "nao_confirmado",
             }
 
-        clean, error = self._validate_method_name(name)
+        clean, error = validate_method_name(name)
         if error:
             return {"error": error, "tipo": "invalido"}
 
-        # Multi-tenant: verificar conflito no escopo correto (system + user)
         if self.user_id is not None:
             existing = self.conn.execute(
                 "SELECT name FROM payment_methods WHERE LOWER(name) = LOWER(?) AND (user_id IS NULL OR user_id = ?)",
@@ -395,7 +273,6 @@ class ExpenseService:
         if existing:
             return {"error": f"Método '{existing['name']}' já existe.", "tipo": "duplicata"}
 
-        # Multi-tenant: incluir user_id
         if self.user_id is not None:
             self.conn.execute(
                 "INSERT INTO payment_methods (name, is_system, user_id) VALUES (?, 0, ?)",
@@ -405,89 +282,24 @@ class ExpenseService:
             self.conn.execute("INSERT INTO payment_methods (name, is_system) VALUES (?, 0)", (clean,))
 
         self.conn.commit()
-
-        logger.info("Método de pagamento criado pelo usuário: %s", clean)
         return {"created": True, "name": clean}
 
     def create_category(self, name: str, confirmed: bool) -> dict:
-        """Cria uma nova categoria de gastos definida pelo usuário.
-
-        ATENÇÃO: confirmed=True somente após confirmação explícita do usuário nessa mensagem.
-        Categorias do sistema (is_system=1) não podem ser substituídas; esta tool só cria
-        categorias novas (is_system=0).
-
-        Args:
-            name: Nome da nova categoria (será normalizado para title case)
-            confirmed: True apenas se o usuário confirmou explicitamente agora
-
-        Returns:
-            dict com {"created": True, "name": ...} ou {"error": ..., "tipo": ...}
-        """
-        if not confirmed:
-            return {
-                "error": "Criação de categoria requer confirmed=True. Mostre o nome ao usuário e aguarde confirmação.",
-                "tipo": "nao_confirmado",
-            }
-
-        clean, error = self._validate_category_name(name)
-        if error:
-            return {"error": error, "tipo": "invalido"}
-
-        # Multi-tenant: verificar conflito no escopo correto (system + user)
-        if self.user_id is not None:
-            existing = self.conn.execute(
-                "SELECT name FROM categories WHERE LOWER(name) = LOWER(?) AND (user_id IS NULL OR user_id = ?)",
-                (clean, self.user_id),
-            ).fetchone()
-        else:
-            existing = self.conn.execute(
-                "SELECT name FROM categories WHERE LOWER(name) = LOWER(?)", (clean,)
-            ).fetchone()
-
-        if existing:
-            return {
-                "error": f"Categoria '{existing['name']}' já existe.",
-                "tipo": "duplicata",
-            }
-
-        # Multi-tenant: incluir user_id
-        if self.user_id is not None:
-            self.conn.execute(
-                "INSERT INTO categories (name, is_system, user_id) VALUES (?, 0, ?)",
-                (clean, self.user_id),
-            )
-        else:
-            self.conn.execute(
-                "INSERT INTO categories (name, is_system) VALUES (?, 0)", (clean,)
-            )
-
-        self.conn.commit()
-
-        logger.info("Categoria criada pelo usuário: %s", clean)
-        return {"created": True, "name": clean}
+        """Cria uma nova categoria de gastos definida pelo usuário."""
+        result = create_custom_category(self.conn, "categories", name, confirmed, self.user_id)
+        if result.get("created"):
+            # Log removido para manter simplicidade; adicione se necessário.
+            pass
+        return result
 
     def find_expense_candidates(
         self,
         keyword: str,
         expense_date: Optional[str] = None,
     ) -> dict:
-        """Busca registros candidatos para edição ou exclusão.
+        """Busca registros candidatos para edição ou exclusão."""
+        normalized_kw = normalize_description(keyword)
 
-        Use esta função ANTES de delete_expense ou update_expense.
-
-        - Com expense_date: retorna registros daquela data que contêm o keyword.
-        - Sem expense_date: retorna registros da DATA MAIS RECENTE que contém o keyword.
-
-        Args:
-            keyword: Palavra-chave da descrição (ex: "almoço", "uber", "farmácia")
-            expense_date: Data em YYYY-MM-DD. Só informe se o usuário mencionou data específica.
-
-        Returns:
-            dict com keyword, date_searched, total_found e records
-        """
-        normalized_kw = self._normalize_description(keyword)
-
-        # Multi-tenant: filtrar por user_id
         if self.user_id is not None:
             all_rows = self.conn.execute(
                 "SELECT id, amount, description, category, method, expense_date "
@@ -502,17 +314,15 @@ class ExpenseService:
                 "ORDER BY expense_date DESC, id DESC"
             ).fetchall()
 
-        # Filtragem em Python para suporte correto a Unicode/acentos
         matching = [
             row for row in all_rows
-            if normalized_kw in self._normalize_description(row["description"])
+            if normalized_kw in normalize_description(row["description"])
         ]
 
         if not matching:
             return {"keyword": keyword, "date_searched": expense_date, "total_found": 0, "records": []}
 
         if expense_date is None:
-            # Usa a data mais recente entre os registros encontrados
             date_searched = max(row["expense_date"] for row in matching)
         else:
             date_searched = expense_date
@@ -527,66 +337,22 @@ class ExpenseService:
         }
 
     def delete_expense(self, expense_id: int, confirmed: bool) -> dict:
-        """Exclui um único registro de gasto (soft delete — dado preservado no banco).
-
-        Use após identificar o registro com find_expense_candidates.
-        O sistema de confirmação HITL gerencia o parâmetro confirmed automaticamente.
-
-        Args:
-            expense_id: ID único do registro a ser excluído
-            confirmed: gerenciado pelo sistema — não altere manualmente
-
-        Returns:
-            dict com {"deleted": True, "expense_id": ..., "record": ...} ou {"error": ..., "tipo": ...}
-        """
+        """Exclui um único registro de gasto (soft delete)."""
         if not confirmed:
             return {
                 "error": "Exclusão requer confirmed=True. Mostre o registro ao usuário e aguarde confirmação.",
                 "tipo": "nao_confirmado",
             }
 
-        # Multi-tenant: verificar que o expense pertence ao usuário
-        if self.user_id is not None:
-            row = self.conn.execute(
-                "SELECT id, amount, description, category, method, expense_date "
-                "FROM expenses WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
-                (expense_id, self.user_id),
-            ).fetchone()
-        else:
-            row = self.conn.execute(
-                "SELECT id, amount, description, category, method, expense_date "
-                "FROM expenses WHERE id = ? AND deleted_at IS NULL",
-                (expense_id,),
-            ).fetchone()
-
-        if not row:
+        old_data = soft_delete(self.conn, "expenses", expense_id, self.user_id)
+        if old_data is None:
             return {
                 "error": f"Registro #{expense_id} não encontrado ou já excluído.",
                 "tipo": "nao_encontrado",
             }
 
-        old_data = self._row_to_dict(row)
-
-        self.conn.execute(
-            "UPDATE expenses SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (expense_id,),
-        )
-
-        # Multi-tenant: incluir user_id no audit_log
-        if self.user_id is not None:
-            self.conn.execute(
-                "INSERT INTO audit_log (operation, expense_id, old_data, user_id) VALUES (?, ?, ?, ?)",
-                ("delete", expense_id, json.dumps(old_data, ensure_ascii=False), self.user_id),
-            )
-        else:
-            self.conn.execute(
-                "INSERT INTO audit_log (operation, expense_id, old_data) VALUES (?, ?, ?)",
-                ("delete", expense_id, json.dumps(old_data, ensure_ascii=False)),
-            )
-
+        log_audit(self.conn, "delete", expense_id, old_data, user_id=self.user_id)
         self.conn.commit()
-
-        logger.info("Registro #%d excluído: %s", expense_id, old_data.get("description"))
         return {"deleted": True, "expense_id": expense_id, "record": old_data}
 
     def update_expense(
@@ -599,30 +365,13 @@ class ExpenseService:
         method: Optional[str] = None,
         expense_date: Optional[str] = None,
     ) -> dict:
-        """Atualiza campos de um único registro de gasto.
-
-        Use após identificar o registro com find_expense_candidates.
-        O sistema de confirmação HITL gerencia o parâmetro confirmed automaticamente.
-
-        Args:
-            expense_id: ID único do registro a ser atualizado
-            confirmed: gerenciado pelo sistema — não altere manualmente
-            amount: Novo valor em reais (opcional)
-            description: Nova descrição (opcional)
-            category: Nova categoria (opcional)
-            method: Novo método de pagamento (opcional)
-            expense_date: Nova data em YYYY-MM-DD (opcional)
-
-        Returns:
-            dict com {"updated": True, "expense_id": ..., "old": ..., "new": ...} ou {"error": ..., "tipo": ...}
-        """
+        """Atualiza campos de um único registro de gasto."""
         if not confirmed:
             return {
                 "error": "Atualização requer confirmed=True. Mostre as mudanças ao usuário e aguarde confirmação.",
                 "tipo": "nao_confirmado",
             }
 
-        # Valida cada campo fornecido antes de tocar no banco
         changes: dict = {}
 
         if amount is not None:
@@ -664,19 +413,13 @@ class ExpenseService:
         if not changes:
             return {"error": "Nenhum campo para atualizar foi fornecido.", "tipo": "invalido"}
 
-        # Multi-tenant: verificar que o expense pertence ao usuário
-        if self.user_id is not None:
-            row = self.conn.execute(
-                "SELECT id, amount, description, category, method, expense_date, hash "
-                "FROM expenses WHERE id = ? AND deleted_at IS NULL AND user_id = ?",
-                (expense_id, self.user_id),
-            ).fetchone()
-        else:
-            row = self.conn.execute(
-                "SELECT id, amount, description, category, method, expense_date, hash "
-                "FROM expenses WHERE id = ? AND deleted_at IS NULL",
-                (expense_id,),
-            ).fetchone()
+        user_filter = " AND user_id = ?" if self.user_id is not None else ""
+        params = (expense_id, self.user_id) if self.user_id is not None else (expense_id,)
+        row = self.conn.execute(
+            f"SELECT id, amount, description, category, method, expense_date, hash "
+            f"FROM expenses WHERE id = ? AND deleted_at IS NULL{user_filter}",
+            params,
+        ).fetchone()
 
         if not row:
             return {
@@ -684,15 +427,14 @@ class ExpenseService:
                 "tipo": "nao_encontrado",
             }
 
-        old_data = self._row_to_dict(row)
+        old_data = row_to_dict(row)
 
-        # Recalcula hash se amount, description ou expense_date mudaram
         hash_fields = {"amount", "description", "expense_date"}
         if hash_fields & set(changes.keys()):
             new_amount = changes.get("amount", old_data["amount"])
             new_desc = changes.get("description", old_data["description"])
             new_date = date.fromisoformat(changes.get("expense_date", old_data["expense_date"]))
-            changes["hash"] = self._compute_hash(float(new_amount), new_desc, new_date)
+            changes["hash"] = compute_hash(float(new_amount), new_desc, new_date)
 
         set_clause = ", ".join(f"{col} = ?" for col in changes)
         values = list(changes.values()) + [expense_id]
@@ -706,32 +448,9 @@ class ExpenseService:
             "SELECT id, amount, description, category, method, expense_date FROM expenses WHERE id = ?",
             (expense_id,),
         ).fetchone()
-        new_data = self._row_to_dict(new_row)
+        new_data = row_to_dict(new_row)
 
-        # Multi-tenant: incluir user_id no audit_log
-        if self.user_id is not None:
-            self.conn.execute(
-                "INSERT INTO audit_log (operation, expense_id, old_data, new_data, user_id) VALUES (?, ?, ?, ?, ?)",
-                (
-                    "update",
-                    expense_id,
-                    json.dumps(old_data, ensure_ascii=False),
-                    json.dumps(new_data, ensure_ascii=False),
-                    self.user_id,
-                ),
-            )
-        else:
-            self.conn.execute(
-                "INSERT INTO audit_log (operation, expense_id, old_data, new_data) VALUES (?, ?, ?, ?)",
-                (
-                    "update",
-                    expense_id,
-                    json.dumps(old_data, ensure_ascii=False),
-                    json.dumps(new_data, ensure_ascii=False),
-                ),
-            )
-
+        log_audit(self.conn, "update", expense_id, old_data, new_data, user_id=self.user_id)
         self.conn.commit()
 
-        logger.info("Registro #%d atualizado", expense_id)
         return {"updated": True, "expense_id": expense_id, "old": old_data, "new": new_data}

@@ -40,8 +40,10 @@ def sample_expenses(test_db):
         (45.00,  "luz residencial",        "Serviços",    "transferência","2026-05-09"),
     ]
 
+    from services._base import compute_hash
+
     for amount, desc, cat, method, expense_date in expenses_data:
-        hash_val = ExpenseService._compute_hash(amount, desc, date_class.fromisoformat(expense_date))
+        hash_val = compute_hash(amount, desc, date_class.fromisoformat(expense_date))
         cursor.execute(
             "INSERT INTO expenses (amount, description, category, method, expense_date, hash) "
             "VALUES (?, ?, ?, ?, ?, ?)",
