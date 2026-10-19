@@ -26,7 +26,7 @@ def test_db(tmp_path, monkeypatch):
 def sample_expenses(test_db):
     """Popula o banco com 6 gastos de exemplo."""
     from database.setup import get_connection
-    from mcp_server.server import _compute_hash
+    from services.expense_service import ExpenseService
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -40,8 +40,10 @@ def sample_expenses(test_db):
         (45.00,  "luz residencial",        "Serviços",    "transferência","2026-05-09"),
     ]
 
+    from services._base import compute_hash
+
     for amount, desc, cat, method, expense_date in expenses_data:
-        hash_val = _compute_hash(amount, desc, date_class.fromisoformat(expense_date))
+        hash_val = compute_hash(amount, desc, date_class.fromisoformat(expense_date))
         cursor.execute(
             "INSERT INTO expenses (amount, description, category, method, expense_date, hash) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -56,8 +58,12 @@ def sample_expenses(test_db):
 
 @pytest.fixture
 def inserted_expense(test_db):
-    """Insere uma despesa via record_expense e retorna seu ID."""
-    from mcp_server.server import record_expense
-    result = record_expense(55.0, "almoço no restaurante", "Alimentação", "dinheiro", "2026-05-10")
+    """Insere uma despesa via ExpenseService e retorna seu ID."""
+    from database.setup import get_connection
+    from services.expense_service import ExpenseService
+
+    conn = get_connection()
+    service = ExpenseService(conn, user_id=None)
+    result = service.record_expense(55.0, "almoço no restaurante", "Alimentação", "dinheiro", "2026-05-10")
     assert "id" in result, f"Falha ao inserir despesa de teste: {result}"
     return result["id"]

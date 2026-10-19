@@ -13,8 +13,6 @@ Usage:
 import asyncio
 import logging
 
-from alembic import command
-from alembic.config import Config
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from telegram import Update
 from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
@@ -27,12 +25,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-
-def run_migrations() -> None:
-    """Aplica todas as migrations pendentes."""
-    cfg = Config("alembic.ini")
-    command.upgrade(cfg, "head")
 
 
 async def handle_message(update: Update, context) -> None:
@@ -81,10 +73,6 @@ async def handle_callback(update: Update, context) -> None:
 
 async def main() -> None:
     """Inicializa bot em modo polling."""
-    # Migrations já devem ter sido rodadas pelo setup_telegram_user.py
-    # run_migrations() pode travar em background, então comentamos
-    # Se precisar rodar migrations, use: python setup_telegram_user.py <telegram_id>
-
     if not settings.telegram_bot_token:
         logger.error("TELEGRAM_BOT_TOKEN não configurado no .env")
         return

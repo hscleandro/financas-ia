@@ -113,12 +113,12 @@ Tem certeza?
 
 **Mudança:**
 ```python
-def build_graph(tools, checkpointer=None, use_telegram_prompt: bool = True):
-    # Agora usa prompt otimizado por padrão
-    system_prompt = get_telegram_system_prompt() if use_telegram_prompt else get_system_prompt()
+def build_graph(tools, checkpointer=None):
+    # Usa sempre o prompt otimizado para Telegram
+    system_prompt = get_telegram_system_prompt()
 ```
 
-**Benefício:** Fácil alternar entre prompt original e otimizado para testes.
+**Benefício:** Código mais simples, focado exclusivamente na experiência Telegram.
 
 ### 7. README Atualizado
 
@@ -163,10 +163,10 @@ README.md                        (modificado)
 
 ## Compatibilidade
 
-✅ **Totalmente retrocompatível**
-- Prompt original preservado em `agent/prompts.py`
-- Parâmetro `use_telegram_prompt` permite alternar
-- Nenhuma breaking change em APIs
+✅ **Foco exclusivo no Telegram**
+- O system prompt otimizado para Telegram é o único prompt ativo
+- A interface `build_graph` foi simplificada, removendo o parâmetro `use_telegram_prompt`
+- Nenhuma breaking change na API pública das tools
 
 ## Testes Recomendados
 

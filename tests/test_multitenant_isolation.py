@@ -5,7 +5,6 @@ Valida que dados de diferentes usuários estão corretamente isolados.
 import sqlite3
 import tempfile
 import os
-from database.setup import get_connection
 from database.user_setup import create_user
 from services.expense_service import ExpenseService
 

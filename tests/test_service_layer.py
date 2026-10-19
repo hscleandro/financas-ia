@@ -1,16 +1,22 @@
-"""Teste manual do Service Layer — Sprint 1.
+"""Testes do Service Layer — Sprint 1.
 
-Valida que a refatoração de MCP → Service funciona corretamente.
+Valida que a refatoração para ExpenseService funciona corretamente.
 """
+import pytest
+
 from database.setup import get_connection
 from services.expense_service import ExpenseService
 
 
-def test_service_layer():
-    """Testa operações básicas do ExpenseService."""
+@pytest.fixture
+def service(test_db):
     conn = get_connection()
-    service = ExpenseService(conn, user_id=None)
+    yield ExpenseService(conn, user_id=None)
+    conn.close()
 
+
+def test_service_layer(service):
+    """Testa operações básicas do ExpenseService."""
     print("=" * 60)
     print("Teste do Service Layer (Sprint 1)")
     print("=" * 60)
@@ -68,7 +74,45 @@ def test_service_layer():
     print("✅ TODOS OS TESTES PASSARAM!")
     print("=" * 60)
 
-    conn.close()
+
+def test_duplicate_expense_returns_warning(service):
+    service.record_expense(
+        amount=55.0,
+        description="Almoço duplicata",
+        category="Alimentação",
+        method="dinheiro",
+        expense_date="2026-05-19",
+    )
+    result = service.record_expense(
+        amount=55.0,
+        description="Almoço duplicata",
+        category="Alimentação",
+        method="dinheiro",
+        expense_date="2026-05-19",
+    )
+    assert result.get("tipo") == "duplicata"
+    assert "warning" in result
+    assert "record" in result
+
+
+def test_duplicate_expense_force_inserts(service):
+    service.record_expense(
+        amount=55.0,
+        description="Almoço duplicata",
+        category="Alimentação",
+        method="dinheiro",
+        expense_date="2026-05-19",
+    )
+    result = service.record_expense(
+        amount=55.0,
+        description="Almoço duplicata",
+        category="Alimentação",
+        method="dinheiro",
+        expense_date="2026-05-19",
+        force=True,
+    )
+    assert "id" in result
+    assert result["amount"] == 55.0
 
 
 if __name__ == "__main__":

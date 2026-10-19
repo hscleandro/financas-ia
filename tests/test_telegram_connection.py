@@ -1,8 +1,13 @@
 """Teste simples de conexão com Telegram Bot."""
 import asyncio
+
+import pytest
 from telegram import Bot
+
 from config import settings
 
+
+@pytest.mark.asyncio
 async def test_bot():
     bot = Bot(token=settings.telegram_bot_token)
     me = await bot.get_me()
@@ -10,6 +15,7 @@ async def test_bot():
     print(f"   Nome: {me.first_name}")
     print(f"   Username: @{me.username}")
     print(f"   ID: {me.id}")
+
 
 if __name__ == "__main__":
     asyncio.run(test_bot())

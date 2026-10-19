@@ -3,7 +3,6 @@
 Lógica de negócio usada tanto em webhook (FastAPI) quanto polling.
 """
 import logging
-from typing import Optional
 
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -12,11 +11,11 @@ from telegram import Bot
 
 from agent.graph import build_graph
 from agent.tools import build_tools
-from config import settings
 from database.setup import get_connection
 from database.user_setup import get_user_by_telegram_id
 from services.expense_service import ExpenseService
-from bot.keyboards import get_confirmation_keyboard, format_expense_for_confirmation
+from services.income_service import IncomeService
+from bot.keyboards import get_confirmation_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ async def process_telegram_message(
 
     Fluxo:
     1. Whitelist: valida telegram_id (chat_id) na tabela users
-    2. Service Layer: instancia ExpenseService com user_id
+    2. Service Layer: instancia ExpenseService e IncomeService com user_id
     3. LangGraph: constrói tools + graph
     4. Executa: verifica state.next (interrupt pendente) ou nova mensagem
     5. Responde: envia mensagem final (com keyboard se HITL)
@@ -59,8 +58,9 @@ async def process_telegram_message(
         logger.info(f"Processando mensagem de user_id={user_id} (telegram_id={chat_id})")
 
         # 2. Service Layer + Tools
-        service = ExpenseService(conn, user_id=user_id)
-        tools = build_tools(service)
+        expense_service = ExpenseService(conn, user_id=user_id)
+        income_service = IncomeService(conn, user_id=user_id)
+        tools = build_tools(expense_service, income_service)
 
         # 3. LangGraph
         graph = build_graph(tools, checkpointer=checkpointer)
