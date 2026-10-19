@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,8 +7,8 @@ class Settings(BaseSettings):
 
     openai_api_key: str
     openai_model: str = "gpt-4o-mini"
-    db_path: str = "./financas.db"
-    checkpoints_path: str = "./checkpoints.db"
+    db_path: str = Field(default="./financas.db", alias="DATABASE_PATH")
+    checkpoints_path: str = Field(default="./checkpoints.db", alias="CHECKPOINTS_PATH")
     max_context_messages: int = 40
 
     # Telegram Bot (MVP 3)
