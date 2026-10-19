@@ -33,3 +33,6 @@ data/*
 # Arquivos do sistema
 .DS_Store
 Thumbs.db
+
+# Chaves SSH/PEM
+*.pem

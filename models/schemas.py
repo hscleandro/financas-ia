@@ -1,6 +1,7 @@
-from pydantic import BaseModel, field_validator
 from datetime import date
 from typing import Optional
+
+from pydantic import BaseModel, field_validator
 
 
 class IncomeCreate(BaseModel):
@@ -31,16 +32,6 @@ class IncomeCreate(BaseModel):
         return v
 
 
-class IncomeRecord(BaseModel):
-    id: int
-    amount: float
-    description: str
-    category: str
-    income_date: date
-    created_at: str
-    hash: str
-
-
 class ExpenseCreate(BaseModel):
     amount: float
     description: str
@@ -68,28 +59,3 @@ class ExpenseCreate(BaseModel):
         if (today - v).days > 365:
             raise ValueError("Data de gasto não pode ser mais de 365 dias no passado")
         return v
-
-
-class ExpenseRecord(BaseModel):
-    id: int
-    amount: float
-    description: str
-    category: str
-    method: str
-    expense_date: date
-    created_at: str
-    hash: str
-
-
-class SummaryItem(BaseModel):
-    dimension: str
-    total: float
-    count: int
-
-
-class Summary(BaseModel):
-    group_by: str
-    start_date: date
-    end_date: date
-    items: list[SummaryItem]
-    total_geral: float
