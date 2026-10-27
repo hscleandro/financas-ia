@@ -78,8 +78,10 @@ def setup_database() -> None:
                 installment_info  TEXT,
                 raw_line          TEXT,
                 matched_expense_id INTEGER,
+                selected_category TEXT,
                 status            TEXT      NOT NULL DEFAULT 'pending'
-                                  CHECK(status IN ('pending', 'matched', 'inserted', 'ignored')),
+                                  CHECK(status IN ('pending', 'matched', 'approved', 'inserted', 'ignored', 'rejected')),
+                reviewed_at       TIMESTAMP,
                 created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 

@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 
+{% set show_back = false %}
+
 {% block title %}Dashboard - Finanças IA{% endblock %}
 
 {% block content %}
 <div class="between">
     <div>
-        <h1>Visão geral</h1>
+        <h1>Overview</h1>
         <div class="muted">Seu dinheiro, de forma simples.</div>
     </div>
     <select aria-label="Período" disabled>
@@ -28,8 +30,15 @@
 
 <div class="actions">
     <a href="/importar-fatura" class="btn btn-primary">＋ Importar fatura</a>
-    <a href="/importar-fatura" class="btn btn-secondary">⇄ Revisar conciliação</a>
-    <a href="/extrato-bancario" class="btn btn-secondary">🏦 Extrato bancário</a>
+    {% if pending.has_pending %}
+    <a href="/revisar-fatura/{{ pending.statement_id }}" class="btn btn-secondary">
+        ⇄ Revisar conciliação
+        <span style="background:var(--mint);color:#09231d;border-radius:10px;padding:2px 8px;margin-left:6px;font-size:11px;">{{ pending.pending_count }}</span>
+    </a>
+    {% else %}
+    <button class="btn btn-secondary" disabled title="Nenhuma conciliação pendente">⇄ Revisar conciliação</button>
+    {% endif %}
+    <a href="/extrato-bancario" class="btn btn-secondary">🏦 Importar extrato bancário</a>
 </div>
 
 <div class="layout">

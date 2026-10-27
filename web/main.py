@@ -1,14 +1,12 @@
-"""Aplicação web responsiva do Finanças IA.
+"""Aplicação web responsiva do Finanças IA — V1.1.
 
 Entrypoint: uvicorn web.main:app --host 0.0.0.0 --port 8080
 
-Endpoints:
-- GET  /                    → dashboard de despesas
-- GET  /importar-fatura     → upload de fatura PDF
-- POST /importar-fatura     → processa upload
-- GET  /revisar-fatura/{id} → tela de conciliação
-- POST /confirmar-fatura/{id} → confirma conciliação
-- GET  /extrato-bancario    → entrada "Em breve"
+A V1.1 introduz:
+- Aprovação individual de lançamentos
+- Persistência de progresso
+- Seleção de múltiplos cartões
+- Sugestão automática de categoria
 """
 import os
 from contextlib import asynccontextmanager
@@ -17,7 +15,7 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -28,7 +26,6 @@ from services.expense_service import ExpenseService
 from services.statement_service import StatementService
 from web.auth import _resolve_default_user, check_password, get_current_user
 
-# Diretórios
 BASE_DIR = Path(__file__).parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
@@ -37,7 +34,6 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def run_migrations() -> None:
-    """Aplica migrations pendentes."""
     cfg = Config("alembic.ini")
     command.upgrade(cfg, "head")
 
@@ -53,7 +49,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=settings.web_session_secret,
     session_cookie="financas_session",
-    max_age=3600 * 8,  # 8 horas
+    max_age=3600 * 8,
 )
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -62,7 +58,6 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _save_upload(file: UploadFile) -> Path:
-    """Salva o arquivo enviado em disco e retorna o caminho."""
     suffix = Path(file.filename or "fatura.pdf").suffix
     dest = UPLOADS_DIR / f"stmt_{os.urandom(8).hex()}{suffix}"
     with open(dest, "wb") as f:
@@ -78,6 +73,10 @@ def _get_expense_service(user: dict = Depends(get_current_user)):
 def _get_statement_service(user: dict = Depends(get_current_user)):
     conn = get_connection()
     return StatementService(conn, user_id=user["id"])
+
+
+def _referer_or_dashboard(request: Request) -> str:
+    return request.headers.get("referer") or "/"
 
 
 # ─── Autenticação ────────────────────────────────────────────────────────────
@@ -110,6 +109,7 @@ async def logout(request: Request):
 async def dashboard(
     request: Request,
     service: ExpenseService = Depends(_get_expense_service),
+    statement_service: StatementService = Depends(_get_statement_service),
     user: dict = Depends(get_current_user),
 ):
     from datetime import date
@@ -135,6 +135,7 @@ async def dashboard(
     )
 
     categories = service.list_categories()
+    pending = statement_service.get_pending_summary()
 
     return templates.TemplateResponse(
         "dashboard.html",
@@ -146,6 +147,7 @@ async def dashboard(
             "summary_month": summary_month,
             "categories": categories,
             "current_month": today.strftime("%B/%Y"),
+            "pending": pending,
         },
     )
 
@@ -163,8 +165,7 @@ async def import_statement_page(request: Request, user: dict = Depends(get_curre
 async def import_statement(
     request: Request,
     file: UploadFile = File(...),
-    card_last_four: str = Form(""),
-    card_holder: str = Form(""),
+    selected_cards: list[str] = Form(default=[]),
     service: StatementService = Depends(_get_statement_service),
     user: dict = Depends(get_current_user),
 ):
@@ -172,53 +173,102 @@ async def import_statement(
         raise HTTPException(status_code=400, detail="Envie um arquivo PDF.")
 
     dest = _save_upload(file)
+
+    # Pré-processa para identificar cartões
     try:
-        statement_id, statement = service.import_statement(
-            dest,
-            card_last_four=card_last_four or None,
-            card_holder=card_holder or None,
-        )
+        from services.statement_parser import parse_bradesco_statement
+        preview = parse_bradesco_statement(dest)
     except Exception as e:
         dest.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=f"Erro ao processar fatura: {e}")
+        raise HTTPException(status_code=400, detail=f"Erro ao ler fatura: {e}")
 
-    # Remove o arquivo após extração (dados já estão no banco)
-    dest.unlink(missing_ok=True)
-
-    # Se não informou cartão/titular e a fatura tem múltiplos, redireciona para seleção
-    holders = statement.card_holders
-    if len(holders) > 1 and not card_last_four:
+    cards = preview.card_holders
+    if len(cards) > 1 and not selected_cards:
+        # Armazena o caminho do PDF na sessão para reutilização
+        request.session["pending_pdf_path"] = str(dest)
         return templates.TemplateResponse(
             "select_holder.html",
             {
                 "request": request,
                 "user": user,
-                "statement_id": statement_id,
-                "holders": holders,
+                "holders": cards,
             },
         )
 
-    return RedirectResponse(
-        url=f"/revisar-fatura/{statement_id}?card_last_four={card_last_four or ''}",
-        status_code=302,
+    try:
+        statement_id, statement, processed_cards = service.import_statement(
+            dest,
+            selected_cards=selected_cards or None,
+        )
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        request.session.pop("pending_pdf_path", None)
+        raise HTTPException(status_code=400, detail=f"Erro ao processar fatura: {e}")
+
+    dest.unlink(missing_ok=True)
+    request.session.pop("pending_pdf_path", None)
+    return RedirectResponse(url=f"/revisar-fatura/{statement_id}", status_code=302)
+
+
+@app.get("/selecionar-cartoes", response_class=HTMLResponse)
+async def select_cards_page(request: Request, user: dict = Depends(get_current_user)):
+    pending_path = request.session.get("pending_pdf_path")
+    if not pending_path or not Path(pending_path).exists():
+        return RedirectResponse(url="/importar-fatura", status_code=302)
+
+    from services.statement_parser import parse_bradesco_statement
+    preview = parse_bradesco_statement(pending_path)
+
+    return templates.TemplateResponse(
+        "select_holder.html",
+        {
+            "request": request,
+            "user": user,
+            "holders": preview.card_holders,
+        },
     )
 
+
+@app.post("/selecionar-cartoes")
+async def select_cards(
+    request: Request,
+    selected_cards: list[str] = Form(default=[]),
+    service: StatementService = Depends(_get_statement_service),
+    user: dict = Depends(get_current_user),
+):
+    pending_path = request.session.get("pending_pdf_path")
+    if not pending_path or not Path(pending_path).exists():
+        return RedirectResponse(url="/importar-fatura", status_code=302)
+
+    if not selected_cards:
+        raise HTTPException(status_code=400, detail="Selecione pelo menos um cartão.")
+
+    try:
+        statement_id, statement, processed_cards = service.import_statement(
+            pending_path,
+            selected_cards=selected_cards,
+        )
+    except Exception as e:
+        Path(pending_path).unlink(missing_ok=True)
+        request.session.pop("pending_pdf_path", None)
+        raise HTTPException(status_code=400, detail=f"Erro ao processar fatura: {e}")
+
+    Path(pending_path).unlink(missing_ok=True)
+    request.session.pop("pending_pdf_path", None)
+    return RedirectResponse(url=f"/revisar-fatura/{statement_id}", status_code=302)
+
+
+# ─── Revisar fatura ──────────────────────────────────────────────────────────
 
 @app.get("/revisar-fatura/{statement_id}", response_class=HTMLResponse)
 async def review_statement(
     request: Request,
     statement_id: int,
-    card_last_four: str = "",
-    card_holder: str = "",
     service: StatementService = Depends(_get_statement_service),
     expense_service: ExpenseService = Depends(_get_expense_service),
     user: dict = Depends(get_current_user),
 ):
-    result = service.reconcile(
-        statement_id,
-        card_last_four=card_last_four or None,
-        card_holder=card_holder or None,
-    )
+    result = service.reconcile(statement_id)
     categories = expense_service.list_categories()
 
     return templates.TemplateResponse(
@@ -227,93 +277,110 @@ async def review_statement(
             "request": request,
             "user": user,
             "statement_id": statement_id,
-            "card_last_four": card_last_four,
-            "card_holder": card_holder,
-            "only_on_statement": result.only_on_statement,
-            "matched": result.matched,
+            "sections": result.sections,
             "ambiguous": result.ambiguous,
-            "only_on_database": result.only_on_database,
             "warnings": result.warnings,
             "categories": categories,
         },
     )
 
 
-@app.post("/confirmar-fatura/{statement_id}")
-async def confirm_statement(
-    request: Request,
-    statement_id: int,
+# ─── Aprovação individual ────────────────────────────────────────────────────
+
+@app.post("/api/approve-insert/{tx_id}")
+async def approve_insert(
+    tx_id: int,
+    category: str = Form(...),
     service: StatementService = Depends(_get_statement_service),
     user: dict = Depends(get_current_user),
 ):
-    form = await request.form()
+    result = service.approve_insert(tx_id, category=category)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return JSONResponse(result)
 
-    def _to_int_list(key: str) -> list[int]:
-        values = form.getlist(key)
-        return [int(v) for v in values if v]
 
-    insert_ids = _to_int_list("insert_ids")
-    delete_ids = _to_int_list("delete_ids")
-    update_pairs_raw = form.getlist("update_pairs")
+@app.post("/api/approve-match/{tx_id}/{expense_id}")
+async def approve_match(
+    tx_id: int,
+    expense_id: int,
+    service: StatementService = Depends(_get_statement_service),
+    user: dict = Depends(get_current_user),
+):
+    result = service.approve_match(tx_id, expense_id)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return JSONResponse(result)
 
-    parsed_updates: list[tuple[int, int]] = []
-    for pair in update_pairs_raw:
-        try:
-            tx_id, exp_id = pair.split(":")
-            parsed_updates.append((int(tx_id), int(exp_id)))
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Formato inválido: {pair}")
 
-    # Valida e agrupa inserções por categoria
-    inserts_by_category: dict[str, list[int]] = {}
-    for tx_id in insert_ids:
-        cat = form.get(f"category_{tx_id}")
-        if not cat:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Selecione uma categoria para o lançamento {tx_id}.",
-            )
-        inserts_by_category.setdefault(cat, []).append(tx_id)
+@app.post("/api/approve-review/{expense_id}")
+async def approve_review(
+    expense_id: int,
+    statement_id: int = Form(...),
+    service: StatementService = Depends(_get_statement_service),
+    user: dict = Depends(get_current_user),
+):
+    result = service.approve_review(expense_id, statement_id)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return JSONResponse(result)
 
-    summary = {
-        "inserted": 0,
-        "updated": 0,
-        "deleted": 0,
-        "errors": [],
-    }
 
-    if inserts_by_category:
-        for category, tx_ids in inserts_by_category.items():
-            partial = service.confirm_reconciliation(
-                statement_id,
-                insert_ids=tx_ids,
-                update_pairs=parsed_updates,
-                delete_ids=delete_ids,
-                default_category=category,
-            )
-            summary["inserted"] += partial["inserted"]
-            summary["updated"] += partial["updated"]
-            summary["deleted"] += partial["deleted"]
-            summary["errors"].extend(partial["errors"])
-    else:
-        partial = service.confirm_reconciliation(
-            statement_id,
-            insert_ids=[],
-            update_pairs=parsed_updates,
-            delete_ids=delete_ids,
-            default_category="Outros",
-        )
-        summary["inserted"] = partial["inserted"]
-        summary["updated"] = partial["updated"]
-        summary["deleted"] = partial["deleted"]
-        summary["errors"] = partial["errors"]
+@app.post("/api/reject/{tx_id}")
+async def reject_tx(
+    tx_id: int,
+    service: StatementService = Depends(_get_statement_service),
+    user: dict = Depends(get_current_user),
+):
+    result = service.reject(tx_id)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return JSONResponse(result)
 
-    request.session["flash"] = (
-        f"Inseridos: {summary['inserted']}, Atualizados: {summary['updated']}, "
-        f"Excluídos: {summary['deleted']}. Erros: {len(summary['errors'])}"
-    )
 
-    return RedirectResponse(url="/", status_code=302)
+@app.post("/api/update-category/{tx_id}")
+async def update_category(
+    tx_id: int,
+    category: str = Form(...),
+    service: StatementService = Depends(_get_statement_service),
+    user: dict = Depends(get_current_user),
+):
+    result = service.update_category(tx_id, category)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return JSONResponse(result)
+
+
+@app.get("/api/suggest-category/{tx_id}")
+async def suggest_category(
+    tx_id: int,
+    service: StatementService = Depends(_get_statement_service),
+    user: dict = Depends(get_current_user),
+):
+    from services.category_suggester import CategorySuggester
+    from database.setup import get_connection
+
+    conn = get_connection()
+    try:
+        tx_row = conn.execute(
+            """
+            SELECT st.description, cs.user_id
+            FROM statement_transactions st
+            JOIN card_statements cs ON cs.id = st.statement_id
+            WHERE st.id = ?
+            """,
+            (tx_id,),
+        ).fetchone()
+        if not tx_row or tx_row["user_id"] != user["id"]:
+            raise HTTPException(status_code=404, detail="Lançamento não encontrado.")
+
+        suggester = CategorySuggester(conn, user["id"])
+        category = suggester.suggest(tx_row["description"])
+        if category:
+            service.update_category(tx_id, category)
+        return JSONResponse({"category": category})
+    finally:
+        conn.close()
 
 
 # ─── Extrato bancário (Em breve) ─────────────────────────────────────────────

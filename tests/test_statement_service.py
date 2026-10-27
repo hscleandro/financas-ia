@@ -67,13 +67,15 @@ def test_reconcile_matches_exact_value_and_date(test_db):
     )
     conn.commit()
 
-    result = service.reconcile(statement_id, card_last_four="3006")
+    result = service.reconcile(statement_id)
 
-    assert len(result.matched) == 1
-    assert result.matched[0].expense["id"] == exp_id
-    assert result.matched[0].statement_tx.amount_cents == 5000
-    assert len(result.only_on_statement) == 0
-    assert len(result.only_on_database) == 0
+    section = result.sections.get("3006")
+    assert section is not None
+    assert len(section.matched) == 1
+    assert section.matched[0].expense["id"] == exp_id
+    assert section.matched[0].statement_tx.amount_cents == 5000
+    assert len(section.only_on_statement) == 0
+    assert len(section.only_on_database) == 0
 
 
 def test_reconcile_tolerates_two_day_date_difference(test_db):
@@ -107,9 +109,11 @@ def test_reconcile_tolerates_two_day_date_difference(test_db):
     )
     conn.commit()
 
-    result = service.reconcile(statement_id, card_last_four="3006")
-    assert len(result.matched) == 1
-    assert result.matched[0].expense["id"] == exp_id
+    result = service.reconcile(statement_id)
+    section = result.sections.get("3006")
+    assert section is not None
+    assert len(section.matched) == 1
+    assert section.matched[0].expense["id"] == exp_id
 
 
 def test_reconcile_does_not_match_three_day_difference(test_db):
@@ -143,10 +147,12 @@ def test_reconcile_does_not_match_three_day_difference(test_db):
     )
     conn.commit()
 
-    result = service.reconcile(statement_id, card_last_four="3006")
-    assert len(result.matched) == 0
-    assert len(result.only_on_statement) == 1
-    assert len(result.only_on_database) == 1
+    result = service.reconcile(statement_id)
+    section = result.sections.get("3006")
+    assert section is not None
+    assert len(section.matched) == 0
+    assert len(section.only_on_statement) == 1
+    assert len(section.only_on_database) == 1
 
 
 def test_reconcile_one_to_one_blocks_multiple_matches(test_db):
@@ -182,10 +188,12 @@ def test_reconcile_one_to_one_blocks_multiple_matches(test_db):
     )
     conn.commit()
 
-    result = service.reconcile(statement_id, card_last_four="3006")
+    result = service.reconcile(statement_id)
     # Como há múltiplos candidatos, deve ir para ambíguo
     assert len(result.ambiguous) == 1
-    assert len(result.matched) == 0
+    section = result.sections.get("3006")
+    assert section is not None
+    assert len(section.matched) == 0
 
 
 def test_confirm_reconciliation_inserts_and_updates_and_deletes(test_db):

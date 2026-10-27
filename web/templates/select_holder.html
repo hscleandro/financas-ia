@@ -1,20 +1,22 @@
 {% extends "base.html" %}
 
-{% block title %}Selecionar titular - Finanças IA{% endblock %}
+{% block title %}Selecionar cartões - Finanças IA{% endblock %}
 
 {% block content %}
-<h1>Selecionar titular/cartão</h1>
-<p class="sub">A fatura contém lançamentos de mais de um titular. Selecione qual deseja processar.</p>
+<h1>Selecionar cartões</h1>
+<p class="sub">A fatura contém lançamentos de mais de um cartão. Selecione quais deseja processar.</p>
 
 <div class="card">
-    <form method="get" action="/revisar-fatura/{{ statement_id }}">
+    <form method="post" action="/selecionar-cartoes">
+        <p class="section-info">Selecione os cartões:</p>
+
         {% for holder in holders %}
         <div class="expense" style="margin-bottom: 0.75rem;">
-            <input type="radio" name="card_last_four" value="{{ holder.last_four }}" required>
-            <div>
+            <input type="checkbox" name="selected_cards" value="{{ holder.last_four }}" id="card_{{ holder.last_four }}">
+            <label for="card_{{ holder.last_four }}" style="margin:0;cursor:pointer;">
                 <div class="name">{{ holder.name or 'Titular não identificado' }}</div>
                 <div class="date">Final do cartão: {{ holder.last_four }}</div>
-            </div>
+            </label>
         </div>
         {% endfor %}
 

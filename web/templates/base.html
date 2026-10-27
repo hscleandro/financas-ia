@@ -43,6 +43,14 @@
             gap: 12px;
         }
 
+        header {
+            margin-bottom: 20px;
+        }
+
+        header a {
+            text-decoration: none;
+        }
+
         .brand {
             font-weight: 800;
             font-size: 19px;
@@ -463,8 +471,12 @@
     <main>
         {% if user %}
         <header>
-            <div class="brand">◈ Finanças <b>IA</b></div>
-            <div class="pill">☻ {{ user.name or 'Usuário' }}</div>
+            <div>
+                {% if show_back|default(true) %}
+                <a href="{{ back_url|default('/') }}" class="btn btn-secondary" style="padding: 8px 12px; margin-right: 8px;">← Voltar</a>
+                {% endif %}
+            </div>
+            <div class="pill">☻ Minha Conta</div>
         </header>
         {% endif %}
 
