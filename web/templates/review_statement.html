@@ -3,8 +3,23 @@
 {% block title %}Revisar conciliação - Finanças IA{% endblock %}
 
 {% block content %}
+{% set all_statement = [] %}
+{% set all_matched = [] %}
+{% set all_database = [] %}
+{% for card, section in sections.items() %}
+    {% for tx in section.only_on_statement %}
+        {% set _ = all_statement.append((card, tx)) %}
+    {% endfor %}
+    {% for pair in section.matched %}
+        {% set _ = all_matched.append((card, pair)) %}
+    {% endfor %}
+    {% for exp in section.only_on_database %}
+        {% set _ = all_database.append((card, exp)) %}
+    {% endfor %}
+{% endfor %}
+
 <h1>Revisar conciliação</h1>
-<p class="sub">Aprove ou rejeite cada lançamento. O progresso é salvo automaticamente.</p>
+<p class="sub">Confira os lançamentos antes de atualizar seus gastos.</p>
 
 {% if warnings %}
 {% for w in warnings %}
@@ -12,108 +27,129 @@
 {% endfor %}
 {% endif %}
 
-<div class="stats">
-    {% set pending_total = namespace(value=0) %}
-    {% for card, section in sections.items() %}
-        {% set pending_total.value = pending_total.value + section.only_on_statement|length + section.matched|length + section.only_on_database|length %}
-    {% endfor %}
-    <div class="stat">
-        <strong id="pending-count">{{ pending_total.value }}</strong>
-        <small>Pendentes</small>
-    </div>
-    <div class="stat">
-        <strong id="approved-count">0</strong>
-        <small>Aprovados</small>
-    </div>
-    <div class="stat">
-        <strong id="rejected-count">0</strong>
-        <small>Rejeitados</small>
-    </div>
+<div class="summary-cards">
+    <button type="button" class="summary-card active" data-section="statement">
+        <strong id="count-statement">{{ all_statement|length }}</strong>
+        <span>Só na fatura</span>
+    </button>
+    <button type="button" class="summary-card" data-section="matched">
+        <strong id="count-matched">{{ all_matched|length }}</strong>
+        <span>Conciliados</span>
+    </button>
+    <button type="button" class="summary-card" data-section="database">
+        <strong id="count-database">{{ all_database|length }}</strong>
+        <span>Só no banco</span>
+    </button>
 </div>
 
-{% for card, section in sections.items() %}
-<h3 class="section-title">Cartão final {{ card }}</h3>
+<p class="section-hint">Selecione uma categoria e clique em Aprovar para cada lançamento.</p>
 
-<h4 style="color:var(--mint);font-size:14px;margin:1rem 0 0.5rem;">Só na fatura</h4>
-{% for tx in section.only_on_statement %}
-<div class="expense" data-tx-id="{{ tx.id }}" data-type="insert">
-    <div style="min-width:0;">
-        <div class="name" title="{{ tx.description }}">{{ tx.description }}</div>
-        <div class="date">{{ tx.transaction_date.strftime('%d/%m/%Y') }}
-            {% if tx.installment_info %}· Parcela {{ tx.installment_info }}{% endif %}
+<div id="panel-statement" class="section-panel active">
+    <h4 class="section-heading" style="color:var(--mint);">Só na fatura</h4>
+    {% if all_statement %}
+        {% for card, tx in all_statement %}
+        <div class="expense" data-tx-id="{{ tx.id }}" data-type="insert">
+            <div class="expense-main">
+                <div class="expense-info">
+                    <div class="name" title="{{ tx.description }}">{{ tx.description }}</div>
+                    <div class="date">{{ tx.transaction_date.strftime('%d/%m/%Y') }}
+                        {% if tx.installment_info %}· Parcela {{ tx.installment_info }}{% endif %}
+                        {% if card and card != 'não identificado' %}· Cartão final {{ card }}{% endif %}
+                    </div>
+                </div>
+                <div class="amount">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</div>
+            </div>
+            <select class="category-select" data-tx-id="{{ tx.id }}">
+                <option value="">Selecionar categoria</option>
+                {% for cat in categories %}
+                <option value="{{ cat }}" {% if tx.selected_category == cat %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+            <div class="expense-actions">
+                <button type="button" class="btn btn-primary btn-approve" data-tx-id="{{ tx.id }}" data-type="insert">✓ Aprovar</button>
+                <button type="button" class="btn btn-secondary btn-reject" data-tx-id="{{ tx.id }}">✕</button>
+            </div>
         </div>
-    </div>
-    <div class="amount">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</div>
-    <select class="category-select" data-tx-id="{{ tx.id }}">
-        <option value="">Selecionar categoria...</option>
-        {% for cat in categories %}
-        <option value="{{ cat }}" {% if tx.selected_category == cat %}selected{% endif %}>{{ cat }}</option>
         {% endfor %}
-    </select>
-    <div style="grid-column:2/4;display:flex;gap:8px;margin-top:4px;">
-        <button type="button" class="btn btn-primary btn-approve" data-tx-id="{{ tx.id }}" data-type="insert" style="flex:1;padding:8px;">✓ Aprovar</button>
-        <button type="button" class="btn btn-secondary btn-reject" data-tx-id="{{ tx.id }}" style="padding:8px 12px;">✕</button>
-    </div>
+    {% else %}
+        <p class="section-info">Nenhum lançamento novo.</p>
+    {% endif %}
 </div>
-{% else %}
-<p class="section-info">Nenhum lançamento novo.</p>
-{% endfor %}
 
-<h4 style="color:var(--blue);font-size:14px;margin:1rem 0 0.5rem;">Na fatura e no banco</h4>
-{% for pair in section.matched %}
-<div class="expense" data-tx-id="{{ pair.statement_tx.id }}" data-type="match" data-expense-id="{{ pair.expense.id }}">
-    <div>
-        <div class="name">{{ pair.statement_tx.description }}</div>
-        <div class="date">Fatura: {{ pair.statement_tx.transaction_date.strftime('%d/%m/%Y') }}</div>
-        <div class="date" style="color:#94a7c0;">Banco: {{ pair.expense.expense_date }}</div>
-    </div>
-    <div class="amount">R$ {{ "%.2f"|format(pair.statement_tx.amount_cents / 100) }}</div>
-    <div style="grid-column:2/4;display:flex;gap:8px;">
-        <button type="button" class="btn btn-primary btn-approve" data-tx-id="{{ pair.statement_tx.id }}" data-type="match" data-expense-id="{{ pair.expense.id }}" style="flex:1;padding:8px;">✓ Confirmar</button>
-        <button type="button" class="btn btn-secondary btn-reject" data-tx-id="{{ pair.statement_tx.id }}" style="padding:8px 12px;">✕</button>
-    </div>
+<div id="panel-matched" class="section-panel">
+    <h4 class="section-heading" style="color:var(--blue);">Conciliados</h4>
+    {% if all_matched %}
+        {% for card, pair in all_matched %}
+        <div class="expense" data-tx-id="{{ pair.statement_tx.id }}" data-type="match" data-expense-id="{{ pair.expense.id }}">
+            <div class="expense-main">
+                <div class="expense-info">
+                    <div class="name" title="{{ pair.statement_tx.description }}">{{ pair.statement_tx.description }}</div>
+                    <div class="date">Fatura: {{ pair.statement_tx.transaction_date.strftime('%d/%m/%Y') }} · Banco: {{ pair.expense.expense_date.strftime('%d/%m/%Y') }}
+                        {% if card and card != 'não identificado' %}· Cartão final {{ card }}{% endif %}
+                    </div>
+                </div>
+                <div class="amount">R$ {{ "%.2f"|format(pair.statement_tx.amount_cents / 100) }}</div>
+            </div>
+            <div class="expense-actions">
+                <button type="button" class="btn btn-primary btn-approve" data-tx-id="{{ pair.statement_tx.id }}" data-type="match" data-expense-id="{{ pair.expense.id }}">✓ Confirmar</button>
+                <button type="button" class="btn btn-secondary btn-reject" data-tx-id="{{ pair.statement_tx.id }}">✕</button>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p class="section-info">Nenhuma correspondência.</p>
+    {% endif %}
 </div>
-{% else %}
-<p class="section-info">Nenhuma correspondência.</p>
-{% endfor %}
 
-<h4 style="color:var(--danger);font-size:14px;margin:1rem 0 0.5rem;">Só no banco</h4>
-{% for exp in section.only_on_database %}
-<div class="expense" data-expense-id="{{ exp.id }}" data-type="review">
-    <div>
-        <div class="name">{{ exp.description }}</div>
-        <div class="date">{{ exp.expense_date.strftime('%d/%m/%Y') }} · {{ exp.category }} · {{ exp.method }}</div>
-    </div>
-    <div class="amount">R$ {{ "%.2f"|format(exp.amount) }}</div>
-    <div style="grid-column:2/4;display:flex;gap:8px;">
-        <button type="button" class="btn btn-secondary btn-approve" data-expense-id="{{ exp.id }}" data-type="review" style="flex:1;padding:8px;">✓ Revisado</button>
-    </div>
+<div id="panel-database" class="section-panel">
+    <h4 class="section-heading" style="color:var(--danger);">Só no banco</h4>
+    {% if all_database %}
+        {% for card, exp in all_database %}
+        <div class="expense" data-expense-id="{{ exp.id }}" data-type="review">
+            <div class="expense-main">
+                <div class="expense-info">
+                    <div class="name" title="{{ exp.description }}">{{ exp.description }}</div>
+                    <div class="date">{{ exp.expense_date.strftime('%d/%m/%Y') }} · {{ exp.category }} · {{ exp.method }}
+                        {% if card and card != 'não identificado' %}· Cartão final {{ card }}{% endif %}
+                    </div>
+                </div>
+                <div class="amount">R$ {{ "%.2f"|format(exp.amount) }}</div>
+            </div>
+            <div class="expense-actions">
+                <button type="button" class="btn btn-secondary btn-approve" data-expense-id="{{ exp.id }}" data-type="review">✓ Revisado</button>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p class="section-info">Nenhum registro sem correspondência.</p>
+    {% endif %}
 </div>
-{% else %}
-<p class="section-info">Nenhum registro sem correspondência.</p>
-{% endfor %}
-{% endfor %}
 
 {% if ambiguous %}
 <h3 class="section-title">Ambiguidades</h3>
 <p class="section-info">Múltiplos registros no banco correspondem ao mesmo lançamento.</p>
 {% for tx, candidates in ambiguous %}
 <div class="expense">
-    <div>
-        <div class="name">{{ tx.description }}</div>
-        <div class="date">{{ tx.transaction_date.strftime('%d/%m/%Y') }}</div>
+    <div class="expense-main">
+        <div class="expense-info">
+            <div class="name" title="{{ tx.description }}">{{ tx.description }}</div>
+            <div class="date">{{ tx.transaction_date.strftime('%d/%m/%Y') }}</div>
+        </div>
+        <div class="amount">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</div>
     </div>
-    <div class="amount">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</div>
 </div>
 {% for cand in candidates %}
-<div class="expense ambiguous-row" style="margin-left: 2rem;" data-tx-id="{{ tx.id }}" data-type="match" data-expense-id="{{ cand.id }}">
-    <input type="radio" name="ambiguous_{{ tx.id }}" value="{{ cand.id }}" style="margin-top:4px;">
-    <div>
-        <div class="name">{{ cand.description }}</div>
-        <div class="date">Banco: {{ cand.expense_date }}</div>
+<div class="expense" style="margin-left: 2rem;" data-tx-id="{{ tx.id }}" data-type="match" data-expense-id="{{ cand.id }}">
+    <div class="expense-main">
+        <div class="expense-info">
+            <div class="name" title="{{ cand.description }}">{{ cand.description }}</div>
+            <div class="date">Banco: {{ cand.expense_date.strftime('%d/%m/%Y') }}</div>
+        </div>
+        <div class="amount">R$ {{ "%.2f"|format(cand.amount) }}</div>
     </div>
-    <div class="amount">R$ {{ "%.2f"|format(cand.amount) }}</div>
-    <button type="button" class="btn btn-primary btn-approve" data-tx-id="{{ tx.id }}" data-type="match" data-expense-id="{{ cand.id }}" style="grid-column:2/4;padding:8px;">✓ Confirmar este</button>
+    <div class="expense-actions">
+        <button type="button" class="btn btn-primary btn-approve" data-tx-id="{{ tx.id }}" data-type="match" data-expense-id="{{ cand.id }}">✓ Confirmar este</button>
+    </div>
 </div>
 {% endfor %}
 {% endfor %}
@@ -159,22 +195,63 @@ async function reject(txId) {
 }
 
 function removeElement(el) {
-    el.style.transition = 'opacity 0.3s, transform 0.3s';
+    el.style.transition = 'opacity 0.25s, transform 0.25s';
     el.style.opacity = '0';
-    el.style.transform = 'translateX(20px)';
-    setTimeout(() => el.remove(), 300);
+    el.style.transform = 'translateX(16px)';
+    setTimeout(() => {
+        el.remove();
+        updateEmptyStates();
+    }, 250);
 }
 
-function updateCounters() {
-    const pending = document.querySelectorAll('.expense[data-tx-id], .expense[data-expense-id]').length;
-    // Cálculo simples: aprovados/rejeitados não são persistidos no frontend,
-    // apenas removemos o elemento. Para contadores precisos, recarregar a página.
-    document.getElementById('pending-count').textContent = pending;
+function decrementCounter(section) {
+    const counter = document.getElementById(`count-${section}`);
+    if (counter) {
+        counter.textContent = Math.max(0, parseInt(counter.textContent, 10) - 1);
+    }
 }
+
+function getSectionFromPanel(panel) {
+    if (panel.id === 'panel-statement') return 'statement';
+    if (panel.id === 'panel-matched') return 'matched';
+    if (panel.id === 'panel-database') return 'database';
+    return null;
+}
+
+function updateEmptyStates() {
+    ['statement', 'matched', 'database'].forEach(section => {
+        const panel = document.getElementById(`panel-${section}`);
+        const hasItems = panel.querySelector('.expense[data-tx-id], .expense[data-expense-id]');
+        let emptyMsg = panel.querySelector('.section-info');
+        if (!hasItems && !emptyMsg) {
+            emptyMsg = document.createElement('p');
+            emptyMsg.className = 'section-info';
+            const labels = {
+                statement: 'Nenhum lançamento novo.',
+                matched: 'Nenhuma correspondência.',
+                database: 'Nenhum registro sem correspondência.'
+            };
+            emptyMsg.textContent = labels[section];
+            panel.appendChild(emptyMsg);
+        }
+    });
+}
+
+function showSection(section) {
+    document.querySelectorAll('.summary-card').forEach(card => {
+        card.classList.toggle('active', card.dataset.section === section);
+    });
+    document.querySelectorAll('.section-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.id === `panel-${section}`);
+    });
+}
+
+document.querySelectorAll('.summary-card').forEach(card => {
+    card.addEventListener('click', () => showSection(card.dataset.section));
+});
 
 document.querySelectorAll('.category-select').forEach(sel => {
     sel.addEventListener('change', () => updateCategory(sel.dataset.txId, sel.value));
-    // Se não há categoria selecionada, tenta sugerir via IA sob demanda
     if (!sel.value) {
         fetch(`/api/suggest-category/${sel.dataset.txId}`)
             .then(r => r.json())
@@ -210,8 +287,11 @@ document.querySelectorAll('.btn-approve').forEach(btn => {
         }
 
         if (ok) {
-            removeElement(btn.closest('.expense'));
-            updateCounters();
+            const expenseEl = btn.closest('.expense');
+            const panel = expenseEl.closest('.section-panel');
+            const section = getSectionFromPanel(panel);
+            removeElement(expenseEl);
+            decrementCounter(section);
         } else {
             alert('Erro ao aprovar. Tente novamente.');
         }
@@ -223,8 +303,11 @@ document.querySelectorAll('.btn-reject').forEach(btn => {
         const txId = btn.dataset.txId;
         const ok = await reject(txId);
         if (ok) {
-            removeElement(btn.closest('.expense'));
-            updateCounters();
+            const expenseEl = btn.closest('.expense');
+            const panel = expenseEl.closest('.section-panel');
+            const section = getSectionFromPanel(panel);
+            removeElement(expenseEl);
+            decrementCounter(section);
         } else {
             alert('Erro ao rejeitar. Tente novamente.');
         }

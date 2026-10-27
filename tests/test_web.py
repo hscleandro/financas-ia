@@ -88,6 +88,25 @@ def test_review_page_lists_transactions(client, sample_pdf):
     assert "Só na fatura" in r.text or "Na fatura e no banco" in r.text
 
 
+def test_review_page_has_clickable_summary_cards(client, sample_pdf):
+    _create_user()
+    _login(client)
+    statement_id = _import_statement(client, sample_pdf)
+
+    r = client.get(f"/revisar-fatura/{statement_id}")
+    assert r.status_code == 200
+
+    # Verifica que os três cards de resumo existem e são clicáveis
+    for section in ["statement", "matched", "database"]:
+        assert f'data-section="{section}"' in r.text
+        assert f'id="panel-{section}"' in r.text
+        assert f'id="count-{section}"' in r.text
+
+    # A primeira seção deve estar ativa por padrão
+    assert 'id="panel-statement" class="section-panel active"' in r.text
+    assert "function showSection" in r.text
+
+
 def test_api_approve_insert_and_reject(client, sample_pdf):
     _create_user()
     _login(client)

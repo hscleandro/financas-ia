@@ -219,6 +219,74 @@
             font-size: 11px;
         }
 
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .summary-card {
+            background: #171f2e;
+            border: 1px solid #28354a;
+            border-radius: 17px;
+            padding: 16px 12px;
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--txt);
+        }
+
+        .summary-card strong {
+            display: block;
+            font-size: 26px;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+
+        .summary-card span {
+            font-size: 12px;
+            color: #a3b1c6;
+        }
+
+        .summary-card:hover {
+            background: #1e2738;
+            border-color: #3a4b63;
+        }
+
+        .summary-card.active {
+            background: #1b2f2a;
+            border-color: var(--mint);
+        }
+
+        .summary-card.active strong {
+            color: var(--mint);
+        }
+
+        .summary-card.active span {
+            color: #8ef0c9;
+        }
+
+        .section-hint {
+            color: #a3b1c6;
+            font-size: 13px;
+            margin: 0 0 18px;
+        }
+
+        .section-panel {
+            display: none;
+        }
+
+        .section-panel.active {
+            display: block;
+        }
+
+        .section-heading {
+            font-size: 14px;
+            font-weight: 700;
+            margin: 0 0 12px;
+        }
+
         .tabs {
             display: flex;
             gap: 8px;
@@ -245,16 +313,42 @@
         }
 
         .expense {
-            display: grid;
-            grid-template-columns: 28px minmax(0, 1fr) auto;
-            gap: 11px;
-            align-items: start;
             background: #171f2e;
             border: 1px solid #28354a;
             border-radius: 17px;
-            padding: 15px;
-            margin-bottom: 10px;
+            padding: 16px;
+            margin-bottom: 12px;
             overflow: hidden;
+        }
+
+        .expense-main {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .expense-info {
+            min-width: 0;
+            flex: 1;
+        }
+
+        .expense-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .expense-actions .btn {
+            flex: 1;
+            padding: 10px 14px;
+            font-size: 14px;
+        }
+
+        .expense-actions .btn-reject {
+            flex: 0 0 auto;
+            padding: 10px 16px;
         }
 
         .expense input[type=checkbox] {
@@ -273,7 +367,7 @@
 
         .name {
             font-weight: 700;
-            font-size: 14px;
+            font-size: 15px;
             line-height: 1.35;
             overflow-wrap: break-word;
             word-break: break-word;
@@ -291,19 +385,19 @@
 
         .amount {
             font-weight: 800;
-            font-size: 15px;
+            font-size: 16px;
             white-space: nowrap;
+            color: var(--txt);
         }
 
         .category-select {
-            grid-column: 2/4;
             width: 100%;
             border: 1px solid #34445b;
             border-radius: 10px;
             background: #202c3e;
             color: #dce7f6;
-            padding: 10px;
-            font-size: 13px;
+            padding: 11px 12px;
+            font-size: 14px;
         }
 
         .section-info {
@@ -466,28 +560,22 @@
 
         @media (max-width: 480px) {
             .stats { grid-template-columns: repeat(2, 1fr); }
+            .summary-cards { grid-template-columns: 1fr; }
             .expense {
-                grid-template-columns: minmax(0, 1fr) auto;
-                padding: 12px;
-                gap: 8px;
+                padding: 14px;
             }
-            .expense .amount {
-                grid-column: 2;
-                text-align: right;
-                align-self: start;
-                white-space: nowrap;
+            .expense-main {
+                gap: 10px;
             }
-            .expense .category-select,
-            .expense .btn-approve,
-            .expense .btn-reject {
-                grid-column: 1 / -1;
+            .name {
+                font-size: 14px;
             }
-            .expense input[type=checkbox],
-            .expense input[type=radio] {
-                margin-top: 2px;
+            .amount {
+                font-size: 15px;
             }
-            .expense.ambiguous-row {
-                grid-template-columns: 24px minmax(0, 1fr) auto;
+            .expense-actions .btn {
+                padding: 9px 12px;
+                font-size: 13px;
             }
         }
     </style>
