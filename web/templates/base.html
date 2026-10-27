@@ -254,6 +254,7 @@
             border-radius: 17px;
             padding: 15px;
             margin-bottom: 10px;
+            overflow: hidden;
         }
 
         .expense input[type=checkbox] {
@@ -274,7 +275,12 @@
             font-weight: 700;
             font-size: 14px;
             line-height: 1.35;
-            overflow-wrap: anywhere;
+            overflow-wrap: break-word;
+            word-break: break-word;
+            max-width: 100%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .date {
@@ -460,9 +466,29 @@
 
         @media (max-width: 480px) {
             .stats { grid-template-columns: repeat(2, 1fr); }
-            .expense { grid-template-columns: 24px minmax(0, 1fr); }
-            .expense .amount { grid-column: 2; text-align: right; }
-            .category-select { grid-column: 2; }
+            .expense {
+                grid-template-columns: minmax(0, 1fr) auto;
+                padding: 12px;
+                gap: 8px;
+            }
+            .expense .amount {
+                grid-column: 2;
+                text-align: right;
+                align-self: start;
+                white-space: nowrap;
+            }
+            .expense .category-select,
+            .expense .btn-approve,
+            .expense .btn-reject {
+                grid-column: 1 / -1;
+            }
+            .expense input[type=checkbox],
+            .expense input[type=radio] {
+                margin-top: 2px;
+            }
+            .expense.ambiguous-row {
+                grid-template-columns: 24px minmax(0, 1fr) auto;
+            }
         }
     </style>
     {% block extra_head %}{% endblock %}

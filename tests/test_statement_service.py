@@ -263,3 +263,230 @@ def test_confirm_reconciliation_inserts_and_updates_and_deletes(test_db):
     # Verifica soft delete
     deleted = conn.execute("SELECT deleted_at FROM expenses WHERE id = ?", (del_id,)).fetchone()
     assert deleted["deleted_at"] is not None
+
+
+def test_import_statement_filters_selected_cards(test_db):
+    from database.setup import get_connection
+    from database.user_setup import create_or_update_user
+
+    conn = get_connection()
+    user = create_or_update_user(conn, telegram_id=123461, name="Teste6")
+    user_id = user["id"]
+
+    service = StatementService(conn, user_id)
+
+    # Cria um PDF mínimo em memória para os dois cartões. Como não queremos
+    # depender do parser de PDF real, vamos mockar o parse injetando dados
+    # manualmente no banco e testar a lógica de reconcile por cartão.
+    cursor = conn.execute(
+        """
+        INSERT INTO card_statements (user_id, file_hash, file_name, statement_date, due_date, total_cents, card_last_four, card_holder, status)
+        VALUES (?, 'hash6', 'fatura.pdf', '2026-10-10', '2026-10-10', 17000, '1111,2222', 'LEANDRO', 'pending')
+        """,
+        (user_id,),
+    )
+    statement_id = cursor.lastrowid
+
+    for last_four, desc, amount in [("1111", "COMPRA A", 5000), ("2222", "COMPRA B", 12000)]:
+        conn.execute(
+            """
+            INSERT INTO statement_transactions (statement_id, card_holder, card_last_four, transaction_date, description, amount_cents, raw_line, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+            """,
+            (statement_id, "LEANDRO", last_four, date(2026, 9, 10).isoformat(), desc, amount, f"{desc} {amount}",),
+        )
+    conn.commit()
+
+    result = service.reconcile(statement_id)
+    assert set(result.sections.keys()) == {"1111", "2222"}
+    assert len(result.sections["1111"].only_on_statement) == 1
+    assert len(result.sections["2222"].only_on_statement) == 1
+
+
+def test_approve_insert_creates_expense(test_db):
+    from database.setup import get_connection
+    from database.user_setup import create_or_update_user
+
+    conn = get_connection()
+    user = create_or_update_user(conn, telegram_id=123462, name="Teste7")
+    user_id = user["id"]
+
+    service = StatementService(conn, user_id)
+    cursor = conn.execute(
+        """
+        INSERT INTO card_statements (user_id, file_hash, file_name, statement_date, due_date, total_cents, card_last_four, card_holder, status)
+        VALUES (?, 'hash7', 'fatura.pdf', '2026-10-10', '2026-10-10', 10000, '3006', 'LEANDRO', 'pending')
+        """,
+        (user_id,),
+    )
+    statement_id = cursor.lastrowid
+    cur = conn.execute(
+        """
+        INSERT INTO statement_transactions (statement_id, card_holder, card_last_four, transaction_date, description, amount_cents, raw_line, selected_category, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'Transporte', 'pending')
+        """,
+        (statement_id, "LEANDRO", "3006", date(2026, 9, 10).isoformat(), "UBER", 4500, "UBER 45,00"),
+    )
+    tx_id = cur.lastrowid
+    conn.commit()
+
+    result = service.approve_insert(tx_id, category="Transporte")
+    assert result["success"] is True
+    assert result["category"] == "Transporte"
+
+    expense = conn.execute(
+        "SELECT * FROM expenses WHERE user_id = ? AND description = ?",
+        (user_id, "UBER"),
+    ).fetchone()
+    assert expense is not None
+    assert expense["amount"] == 45.0
+    assert expense["category"] == "Transporte"
+    assert expense["method"] == "crédito"
+
+    tx_status = conn.execute(
+        "SELECT status, selected_category FROM statement_transactions WHERE id = ?",
+        (tx_id,),
+    ).fetchone()
+    assert tx_status["status"] == "inserted"
+    assert tx_status["selected_category"] == "Transporte"
+
+
+def test_approve_match_updates_expense(test_db):
+    from database.setup import get_connection
+    from database.user_setup import create_or_update_user
+
+    conn = get_connection()
+    user = create_or_update_user(conn, telegram_id=123463, name="Teste8")
+    user_id = user["id"]
+
+    exp_id = _insert_credit_expense(conn, user_id, 50.0, "Almoco", date(2026, 9, 10))
+
+    service = StatementService(conn, user_id)
+    cursor = conn.execute(
+        """
+        INSERT INTO card_statements (user_id, file_hash, file_name, statement_date, due_date, total_cents, card_last_four, card_holder, status)
+        VALUES (?, 'hash8', 'fatura.pdf', '2026-10-10', '2026-10-10', 5000, '3006', 'LEANDRO', 'pending')
+        """,
+        (user_id,),
+    )
+    statement_id = cursor.lastrowid
+    cur = conn.execute(
+        """
+        INSERT INTO statement_transactions (statement_id, card_holder, card_last_four, transaction_date, description, amount_cents, raw_line, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'matched')
+        """,
+        (statement_id, "LEANDRO", "3006", date(2026, 9, 10).isoformat(), "ALMOCO RESTAURANTE", 5000, "ALMOCO 50,00"),
+    )
+    tx_id = cur.lastrowid
+    conn.commit()
+
+    result = service.approve_match(tx_id, exp_id)
+    assert result["success"] is True
+
+    updated = conn.execute("SELECT description FROM expenses WHERE id = ?", (exp_id,)).fetchone()
+    assert updated["description"] == "ALMOCO RESTAURANTE"
+
+    tx_status = conn.execute("SELECT status, matched_expense_id FROM statement_transactions WHERE id = ?", (tx_id,)).fetchone()
+    assert tx_status["status"] == "approved"
+    assert tx_status["matched_expense_id"] == exp_id
+
+
+def test_reject_marks_transaction_rejected(test_db):
+    from database.setup import get_connection
+    from database.user_setup import create_or_update_user
+
+    conn = get_connection()
+    user = create_or_update_user(conn, telegram_id=123464, name="Teste9")
+    user_id = user["id"]
+
+    service = StatementService(conn, user_id)
+    cursor = conn.execute(
+        """
+        INSERT INTO card_statements (user_id, file_hash, file_name, statement_date, due_date, total_cents, card_last_four, card_holder, status)
+        VALUES (?, 'hash9', 'fatura.pdf', '2026-10-10', '2026-10-10', 5000, '3006', 'LEANDRO', 'pending')
+        """,
+        (user_id,),
+    )
+    statement_id = cursor.lastrowid
+    cur = conn.execute(
+        """
+        INSERT INTO statement_transactions (statement_id, card_holder, card_last_four, transaction_date, description, amount_cents, raw_line, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+        """,
+        (statement_id, "LEANDRO", "3006", date(2026, 9, 10).isoformat(), "DUMMY", 5000, "DUMMY 50,00"),
+    )
+    tx_id = cur.lastrowid
+    conn.commit()
+
+    result = service.reject(tx_id)
+    assert result["success"] is True
+
+    tx_status = conn.execute("SELECT status FROM statement_transactions WHERE id = ?", (tx_id,)).fetchone()
+    assert tx_status["status"] == "rejected"
+
+
+def test_update_category_persists_selection(test_db):
+    from database.setup import get_connection
+    from database.user_setup import create_or_update_user
+
+    conn = get_connection()
+    user = create_or_update_user(conn, telegram_id=123465, name="Teste10")
+    user_id = user["id"]
+
+    service = StatementService(conn, user_id)
+    cursor = conn.execute(
+        """
+        INSERT INTO card_statements (user_id, file_hash, file_name, statement_date, due_date, total_cents, card_last_four, card_holder, status)
+        VALUES (?, 'hash10', 'fatura.pdf', '2026-10-10', '2026-10-10', 5000, '3006', 'LEANDRO', 'pending')
+        """,
+        (user_id,),
+    )
+    statement_id = cursor.lastrowid
+    cur = conn.execute(
+        """
+        INSERT INTO statement_transactions (statement_id, card_holder, card_last_four, transaction_date, description, amount_cents, raw_line, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+        """,
+        (statement_id, "LEANDRO", "3006", date(2026, 9, 10).isoformat(), "DUMMY", 5000, "DUMMY 50,00"),
+    )
+    tx_id = cur.lastrowid
+    conn.commit()
+
+    result = service.update_category(tx_id, "Lazer")
+    assert result["success"] is True
+
+    tx_cat = conn.execute("SELECT selected_category FROM statement_transactions WHERE id = ?", (tx_id,)).fetchone()
+    assert tx_cat["selected_category"] == "Lazer"
+
+
+def test_get_pending_summary_returns_latest_pending_statement(test_db):
+    from database.setup import get_connection
+    from database.user_setup import create_or_update_user
+
+    conn = get_connection()
+    user = create_or_update_user(conn, telegram_id=123466, name="Teste11")
+    user_id = user["id"]
+
+    service = StatementService(conn, user_id)
+    cursor = conn.execute(
+        """
+        INSERT INTO card_statements (user_id, file_hash, file_name, statement_date, due_date, total_cents, card_last_four, card_holder, status)
+        VALUES (?, 'hash11', 'fatura.pdf', '2026-10-10', '2026-10-10', 15000, '3006', 'LEANDRO', 'pending')
+        """,
+        (user_id,),
+    )
+    statement_id = cursor.lastrowid
+    for i in range(3):
+        conn.execute(
+            """
+            INSERT INTO statement_transactions (statement_id, card_holder, card_last_four, transaction_date, description, amount_cents, raw_line, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+            """,
+            (statement_id, "LEANDRO", "3006", date(2026, 9, 10 + i).isoformat(), f"TX{i}", 5000, f"TX{i} 50,00"),
+        )
+    conn.commit()
+
+    summary = service.get_pending_summary()
+    assert summary["has_pending"] is True
+    assert summary["statement_id"] == statement_id
+    assert summary["pending_count"] == 3
