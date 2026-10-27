@@ -9,9 +9,9 @@ from services.expense_service import ExpenseService
 
 
 @pytest.fixture
-def service(test_db):
+def service(test_db, test_user):
     conn = get_connection()
-    yield ExpenseService(conn, user_id=None)
+    yield ExpenseService(conn, user_id=test_user["id"])
     conn.close()
 
 

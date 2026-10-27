@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Finanças IA{% endblock %}
+
+{% block content %}
+<h2>Dashboard — {{ current_month }}</h2>
+
+<div class="grid-2">
+    <div class="card">
+        <h2>Total de despesas no mês</h2>
+        <div class="metric">R$ {{ "%.2f"|format(summary_category.total_geral) }}</div>
+    </div>
+    <div class="card">
+        <h2>Ações</h2>
+        <a href="/importar-fatura" class="btn">Importar fatura Bradesco</a>
+        <a href="/extrato-bancario" class="btn btn-secondary">Importar extrato bancário</a>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <h2>Por categoria</h2>
+        <div class="chart-container">
+            <canvas id="chartCategory"></canvas>
+        </div>
+        <table>
+            <thead>
+                <tr><th>Categoria</th><th class="text-right">Total</th></tr>
+            </thead>
+            <tbody>
+                {% for item in summary_category['items'] %}
+                <tr>
+                    <td>{{ item.dimension }}</td>
+                    <td class="text-right">R$ {{ "%.2f"|format(item.total) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>Por forma de pagamento</h2>
+        <div class="chart-container">
+            <canvas id="chartMethod"></canvas>
+        </div>
+        <table>
+            <thead>
+                <tr><th>Forma</th><th class="text-right">Total</th></tr>
+            </thead>
+            <tbody>
+                {% for item in summary_method['items'] %}
+                <tr>
+                    <td>{{ item.dimension }}</td>
+                    <td class="text-right">R$ {{ "%.2f"|format(item.total) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Evolução mensal</h2>
+    <div class="chart-container">
+        <canvas id="chartMonth"></canvas>
+    </div>
+</div>
+
+<script>
+const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { position: 'bottom' } }
+};
+
+new Chart(document.getElementById('chartCategory'), {
+    type: 'doughnut',
+    data: {
+        labels: {{ summary_category['items']|map(attribute='dimension')|list|tojson }},
+        datasets: [{
+            data: {{ summary_category['items']|map(attribute='total')|list|tojson }}
+        }]
+    },
+    options: chartOptions
+});
+
+new Chart(document.getElementById('chartMethod'), {
+    type: 'pie',
+    data: {
+        labels: {{ summary_method['items']|map(attribute='dimension')|list|tojson }},
+        datasets: [{
+            data: {{ summary_method['items']|map(attribute='total')|list|tojson }}
+        }]
+    },
+    options: chartOptions
+});
+
+new Chart(document.getElementById('chartMonth'), {
+    type: 'bar',
+    data: {
+        labels: {{ summary_month['items']|map(attribute='dimension')|list|tojson }},
+        datasets: [{
+            label: 'Despesas',
+            data: {{ summary_month['items']|map(attribute='total')|list|tojson }},
+            backgroundColor: '#2563eb'
+        }]
+    },
+    options: chartOptions
+});
+</script>
+{% endblock %}

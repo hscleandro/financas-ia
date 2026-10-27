@@ -36,3 +36,10 @@ Thumbs.db
 
 # Chaves SSH/PEM
 *.pem
+
+# Faturas bancárias e documentos financeiros sensíveis
+*.pdf
+docs/Bradesco_*.pdf
+
+# Uploads da aplicação web
+web/static/uploads/*

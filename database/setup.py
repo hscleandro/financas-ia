@@ -51,8 +51,41 @@ def setup_database() -> None:
                 UNIQUE(name, user_id)
             );
 
+            CREATE TABLE IF NOT EXISTS card_statements (
+                id           INTEGER   PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER   NOT NULL REFERENCES users(id),
+                file_hash    TEXT      NOT NULL,
+                file_name    TEXT      NOT NULL,
+                statement_date DATE,
+                due_date     DATE,
+                total_cents  INTEGER,
+                card_last_four TEXT,
+                card_holder  TEXT,
+                status       TEXT      NOT NULL DEFAULT 'pending'
+                             CHECK(status IN ('pending', 'confirmed', 'failed')),
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_hash, card_last_four)
+            );
+
+            CREATE TABLE IF NOT EXISTS statement_transactions (
+                id                INTEGER   PRIMARY KEY AUTOINCREMENT,
+                statement_id      INTEGER   NOT NULL REFERENCES card_statements(id),
+                card_holder       TEXT,
+                card_last_four    TEXT,
+                transaction_date  DATE      NOT NULL,
+                description       TEXT      NOT NULL,
+                amount_cents      INTEGER   NOT NULL,
+                installment_info  TEXT,
+                raw_line          TEXT,
+                matched_expense_id INTEGER,
+                status            TEXT      NOT NULL DEFAULT 'pending'
+                                  CHECK(status IN ('pending', 'matched', 'inserted', 'ignored')),
+                created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS expenses (
                 id           INTEGER   PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER   NOT NULL REFERENCES users(id),
                 amount       REAL      NOT NULL CHECK(amount > 0 AND amount < 100000),
                 description  TEXT      NOT NULL,
                 category     TEXT      NOT NULL REFERENCES categories(name),
@@ -60,7 +93,10 @@ def setup_database() -> None:
                 expense_date DATE      NOT NULL DEFAULT CURRENT_DATE,
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 hash         TEXT      NOT NULL,
-                deleted_at   TIMESTAMP DEFAULT NULL
+                deleted_at   TIMESTAMP DEFAULT NULL,
+                card_last_four TEXT,
+                card_holder  TEXT,
+                statement_id INTEGER   REFERENCES card_statements(id)
             );
 
             CREATE TABLE IF NOT EXISTS audit_log (
