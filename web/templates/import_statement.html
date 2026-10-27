@@ -3,7 +3,8 @@
 {% block title %}Importar fatura - Finanças IA{% endblock %}
 
 {% block content %}
-<h2>Importar fatura Bradesco</h2>
+<h1>Importar fatura Bradesco</h1>
+<p class="sub">Envie o PDF da fatura do seu cartão Bradesco.</p>
 
 <div class="card">
     <form method="post" action="/importar-fatura" enctype="multipart/form-data">
@@ -16,12 +17,12 @@
         <label for="card_holder">Titular (opcional)</label>
         <input type="text" id="card_holder" name="card_holder" placeholder="ex: LEANDRO HENRIQUE SANTOS CORREA">
 
-        <p class="item-meta">
+        <p class="muted" style="font-size: 12px; margin: 0.5rem 0 1rem;">
             Se a fatura contiver mais de um titular/cartão, deixe os campos acima em branco
             para selecionar na próxima tela.
         </p>
 
-        <button type="submit" class="btn">Processar fatura</button>
+        <button type="submit" class="btn btn-primary">Processar fatura</button>
     </form>
 </div>
 {% endblock %}

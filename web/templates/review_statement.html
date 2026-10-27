@@ -3,7 +3,8 @@
 {% block title %}Revisar conciliação - Finanças IA{% endblock %}
 
 {% block content %}
-<h2>Revisar conciliação</h2>
+<h1>Revisar conciliação</h1>
+<p class="sub">Compare os lançamentos da fatura com os registros do banco e confirme as alterações.</p>
 
 {% if warnings %}
 {% for w in warnings %}
@@ -11,79 +12,93 @@
 {% endfor %}
 {% endif %}
 
+<div class="stats">
+    <div class="stat">
+        <strong>{{ only_on_statement|length }}</strong>
+        <small>Só na fatura</small>
+    </div>
+    <div class="stat">
+        <strong>{{ matched|length }}</strong>
+        <small>Correspondências</small>
+    </div>
+    <div class="stat">
+        <strong>{{ only_on_database|length }}</strong>
+        <small>Só no banco</small>
+    </div>
+</div>
+
+<div class="tabs">
+    <button type="button" class="tab active" data-tab="a">A. Só na fatura</button>
+    <button type="button" class="tab" data-tab="b">B. Na fatura e no banco</button>
+    <button type="button" class="tab" data-tab="c">C. Só no banco</button>
+</div>
+
 <form method="post" action="/confirmar-fatura/{{ statement_id }}">
     <input type="hidden" name="card_last_four" value="{{ card_last_four }}">
 
     <!-- A. Só na fatura -->
-    <h3 class="section-title">A. Só na fatura (serão inseridos)</h3>
-    <div class="card">
-        {% if only_on_statement %}
-        <p class="item-meta">Pré-selecionados para inserção. Desmarque os que não deseja inserir e escolha a categoria.</p>
+    <div id="tab-a" class="tab-content">
+        <p class="section-info">Pré-selecionados para inserção. Desmarque os que não deseja inserir e escolha a categoria.</p>
         {% for tx in only_on_statement %}
-        <div class="item-row">
-            <label>
-                <input type="checkbox" name="insert_ids" value="{{ tx.id or loop.index }}" checked>
-                <span class="item-desc">
-                    {{ tx.transaction_date }} — {{ tx.description }}
-                    {% if tx.installment_info %}
-                    <span class="item-meta">(Parcela {{ tx.installment_info }})</span>
-                    {% endif %}
-                </span>
-            </label>
-            <span class="item-meta">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</span>
-            <select name="category_{{ tx.id or loop.index }}" required>
-                <option value="">Categoria...</option>
+        <div class="expense">
+            <input type="checkbox" name="insert_ids" value="{{ tx.id }}" checked>
+            <div>
+                <div class="name">{{ tx.description }}</div>
+                <div class="date">{{ tx.transaction_date.strftime('%d/%m/%Y') }}
+                    {% if tx.installment_info %}· Parcela {{ tx.installment_info }}{% endif %}
+                </div>
+            </div>
+            <div class="amount">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</div>
+            <select name="category_{{ tx.id }}" class="category-select" required>
+                <option value="">Selecionar categoria...</option>
                 {% for cat in categories %}
                 <option value="{{ cat }}">{{ cat }}</option>
                 {% endfor %}
             </select>
         </div>
-        {% endfor %}
         {% else %}
-        <p class="item-meta">Nenhum lançamento novo na fatura.</p>
-        {% endif %}
+        <p class="section-info">Nenhum lançamento novo na fatura.</p>
+        {% endfor %}
     </div>
 
     <!-- B. Na fatura e no banco -->
-    <h3 class="section-title">B. Na fatura e no banco (atualizar data/descrição)</h3>
-    <div class="card">
-        {% if matched %}
-        <p class="item-meta">Marque os pares que deseja atualizar com os dados da fatura.</p>
+    <div id="tab-b" class="tab-content" style="display:none;">
+        <p class="section-info">Marque os pares que deseja atualizar com os dados da fatura.</p>
         {% for pair in matched %}
-        <div class="item-row">
-            <label>
-                <input type="checkbox" name="update_pairs" value="{{ pair.statement_tx.id or loop.index }}:{{ pair.expense.id }}" checked>
-                <span class="item-desc">
-                    Fatura: {{ pair.statement_tx.transaction_date }} — {{ pair.statement_tx.description }}<br>
-                    <span class="item-meta">Banco: {{ pair.expense.expense_date }} — {{ pair.expense.description }}</span>
-                </span>
-            </label>
-            <span class="item-meta">R$ {{ "%.2f"|format(pair.statement_tx.amount_cents / 100) }}</span>
+        <div class="expense">
+            <input type="checkbox" name="update_pairs" value="{{ pair.statement_tx.id }}:{{ pair.expense.id }}" checked>
+            <div>
+                <div class="name">{{ pair.statement_tx.description }}</div>
+                <div class="date">Fatura: {{ pair.statement_tx.transaction_date.strftime('%d/%m/%Y') }}</div>
+                <div class="date" style="color:#94a7c0;">Banco: {{ pair.expense.expense_date }}</div>
+            </div>
+            <div class="amount">R$ {{ "%.2f"|format(pair.statement_tx.amount_cents / 100) }}</div>
         </div>
-        {% endfor %}
         {% else %}
-        <p class="item-meta">Nenhuma correspondência encontrada.</p>
-        {% endif %}
+        <p class="section-info">Nenhuma correspondência encontrada.</p>
+        {% endfor %}
     </div>
 
     <!-- Ambiguidades -->
     {% if ambiguous %}
-    <h3 class="section-title">Ambiguidades (requer resolução)</h3>
-    <div class="card">
-        <p class="item-meta">Múltiplos registros no banco correspondem ao mesmo lançamento da fatura. Selecione apenas um.</p>
+    <div id="tab-amb" class="tab-content" style="display:none;">
+        <p class="section-info">Múltiplos registros no banco correspondem ao mesmo lançamento. Selecione apenas um.</p>
         {% for tx, candidates in ambiguous %}
-        <div class="item-row">
-            <span class="item-desc">
-                Fatura: {{ tx.transaction_date }} — {{ tx.description }}
-                <span class="item-meta">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</span>
-            </span>
+        <div class="expense">
+            <div>
+                <div class="name">{{ tx.description }}</div>
+                <div class="date">{{ tx.transaction_date.strftime('%d/%m/%Y') }}</div>
+            </div>
+            <div class="amount">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</div>
         </div>
         {% for cand in candidates %}
-        <div class="item-row" style="padding-left: 2rem;">
-            <label>
-                <input type="radio" name="update_pairs" value="{{ tx.id or loop.index }}:{{ cand.id }}">
-                Banco: {{ cand.expense_date }} — {{ cand.description }} (R$ {{ "%.2f"|format(cand.amount) }})
-            </label>
+        <div class="expense" style="margin-left: 2rem;">
+            <input type="radio" name="update_pairs" value="{{ tx.id }}:{{ cand.id }}">
+            <div>
+                <div class="name">{{ cand.description }}</div>
+                <div class="date">Banco: {{ cand.expense_date }}</div>
+            </div>
+            <div class="amount">R$ {{ "%.2f"|format(cand.amount) }}</div>
         </div>
         {% endfor %}
         {% endfor %}
@@ -91,32 +106,39 @@
     {% endif %}
 
     <!-- C. Só no banco -->
-    <h3 class="section-title">C. Só no banco (excluir)</h3>
-    <div class="card">
-        {% if only_on_database %}
-        <p class="item-meta">Marque os registros que deseja excluir. Nenhuma exclusão ocorrerá sem confirmação final.</p>
+    <div id="tab-c" class="tab-content" style="display:none;">
+        <p class="section-info">Marque os registros que deseja excluir. Nenhuma exclusão ocorrerá sem confirmação final.</p>
         {% for exp in only_on_database %}
-        <div class="item-row">
-            <label>
-                <input type="checkbox" name="delete_ids" value="{{ exp.id }}">
-                <span class="item-desc">
-                    {{ exp.expense_date }} — {{ exp.description }}
-                    <span class="item-meta">{{ exp.category }} | {{ exp.method }}</span>
-                </span>
-            </label>
-            <span class="item-meta">R$ {{ "%.2f"|format(exp.amount) }}</span>
+        <div class="expense">
+            <input type="checkbox" name="delete_ids" value="{{ exp.id }}">
+            <div>
+                <div class="name">{{ exp.description }}</div>
+                <div class="date">{{ exp.expense_date.strftime('%d/%m/%Y') }} · {{ exp.category }} · {{ exp.method }}</div>
+            </div>
+            <div class="amount">R$ {{ "%.2f"|format(exp.amount) }}</div>
         </div>
-        {% endfor %}
         {% else %}
-        <p class="item-meta">Nenhum registro elegível no banco sem correspondência.</p>
-        {% endif %}
+        <p class="section-info">Nenhum registro elegível no banco sem correspondência.</p>
+        {% endfor %}
     </div>
 
-    <div class="card" style="text-align: center;">
-        <button type="submit" class="btn btn-success" style="width: 100%;">Confirmar conciliação</button>
-        <p class="item-meta" style="margin-top: 0.5rem;">
+    <div class="card" style="text-align: center; margin-top: 2rem;">
+        <button type="submit" class="btn btn-success" style="width: 100%; padding: 14px;">✓ Confirmar conciliação</button>
+        <p class="muted" style="margin-top: 0.5rem; font-size: 12px;">
             Nenhuma alteração será feita até você clicar em confirmar.
         </p>
     </div>
 </form>
+
+<script>
+document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+        tab.classList.add('active');
+        const target = tab.dataset.tab;
+        document.getElementById('tab-' + target).style.display = 'block';
+    });
+});
+</script>
 {% endblock %}

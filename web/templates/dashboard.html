@@ -3,109 +3,81 @@
 {% block title %}Dashboard - Finanças IA{% endblock %}
 
 {% block content %}
-<h2>Dashboard — {{ current_month }}</h2>
-
-<div class="grid-2">
-    <div class="card">
-        <h2>Total de despesas no mês</h2>
-        <div class="metric">R$ {{ "%.2f"|format(summary_category.total_geral) }}</div>
+<div class="between">
+    <div>
+        <h1>Visão geral</h1>
+        <div class="muted">Seu dinheiro, de forma simples.</div>
     </div>
-    <div class="card">
-        <h2>Ações</h2>
-        <a href="/importar-fatura" class="btn">Importar fatura Bradesco</a>
-        <a href="/extrato-bancario" class="btn btn-secondary">Importar extrato bancário</a>
-    </div>
+    <select aria-label="Período" disabled>
+        <option>{{ current_month }}</option>
+    </select>
 </div>
 
-<div class="grid-2">
+<div class="grid">
+    <section class="card">
+        <div class="muted">Despesas do mês</div>
+        <div class="metric">R$ {{ "%.2f"|format(summary_category['total_geral']) }}</div>
+        <small class="muted">Neste mês</small>
+    </section>
+    <section class="card">
+        <div class="muted">Lançamentos</div>
+        <div class="metric">{{ summary_category['items']|sum(attribute='count') }}</div>
+        <small class="muted">Neste mês</small>
+    </section>
+</div>
+
+<div class="actions">
+    <a href="/importar-fatura" class="btn btn-primary">＋ Importar fatura</a>
+    <a href="/importar-fatura" class="btn btn-secondary">⇄ Revisar conciliação</a>
+    <a href="/extrato-bancario" class="btn btn-secondary">🏦 Extrato bancário</a>
+</div>
+
+<div class="layout">
     <div class="card">
         <h2>Por categoria</h2>
-        <div class="chart-container">
-            <canvas id="chartCategory"></canvas>
+        <div class="donut-wrap">
+            <div class="donut" id="donutCategory">
+                <div class="donut-center">
+                    <small>Total</small>
+                    <strong>R$ {{ "%.2f"|format(summary_category['total_geral']) }}</strong>
+                </div>
+            </div>
         </div>
-        <table>
-            <thead>
-                <tr><th>Categoria</th><th class="text-right">Total</th></tr>
-            </thead>
-            <tbody>
-                {% for item in summary_category['items'] %}
-                <tr>
-                    <td>{{ item.dimension }}</td>
-                    <td class="text-right">R$ {{ "%.2f"|format(item.total) }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="legend">
+            {% for item in summary_category['items'] %}
+            <div>
+                <i style="background: {{ loop.cycle('#62e6ba', '#7daeff', '#c3a0ff', '#f7bb75', '#ff9caa', '#a8e6cf') }}"></i>
+                {{ item.dimension }}
+                <strong>R$ {{ "%.2f"|format(item.total) }}</strong>
+            </div>
+            {% endfor %}
+        </div>
     </div>
 
     <div class="card">
         <h2>Por forma de pagamento</h2>
-        <div class="chart-container">
-            <canvas id="chartMethod"></canvas>
+        {% for item in summary_method['items'] %}
+        <div class="category-track">
+            <div class="between">
+                <span>{{ item.dimension }}</span>
+                <strong>R$ {{ "%.2f"|format(item.total) }}</strong>
+            </div>
+            <div class="track">
+                <div class="fill" style="width: {{ (item.total / (summary_method['items']|map(attribute='total')|max)) * 100 if item.total > 0 else 0 }}%"></div>
+            </div>
         </div>
-        <table>
-            <thead>
-                <tr><th>Forma</th><th class="text-right">Total</th></tr>
-            </thead>
-            <tbody>
-                {% for item in summary_method['items'] %}
-                <tr>
-                    <td>{{ item.dimension }}</td>
-                    <td class="text-right">R$ {{ "%.2f"|format(item.total) }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        {% endfor %}
     </div>
 </div>
 
 <div class="card">
     <h2>Evolução mensal</h2>
-    <div class="chart-container">
-        <canvas id="chartMonth"></canvas>
+    <div class="chart-bar-container">
+        {% for item in summary_month['items'] %}
+        <div class="bar" style="height: {{ (item.total / (summary_month['items']|map(attribute='total')|max)) * 100 if item.total > 0 else 0 }}%">
+            <span>{{ item.dimension.split('-')[1] }}/{{ item.dimension.split('-')[0][2:] }}</span>
+        </div>
+        {% endfor %}
     </div>
 </div>
-
-<script>
-const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { position: 'bottom' } }
-};
-
-new Chart(document.getElementById('chartCategory'), {
-    type: 'doughnut',
-    data: {
-        labels: {{ summary_category['items']|map(attribute='dimension')|list|tojson }},
-        datasets: [{
-            data: {{ summary_category['items']|map(attribute='total')|list|tojson }}
-        }]
-    },
-    options: chartOptions
-});
-
-new Chart(document.getElementById('chartMethod'), {
-    type: 'pie',
-    data: {
-        labels: {{ summary_method['items']|map(attribute='dimension')|list|tojson }},
-        datasets: [{
-            data: {{ summary_method['items']|map(attribute='total')|list|tojson }}
-        }]
-    },
-    options: chartOptions
-});
-
-new Chart(document.getElementById('chartMonth'), {
-    type: 'bar',
-    data: {
-        labels: {{ summary_month['items']|map(attribute='dimension')|list|tojson }},
-        datasets: [{
-            label: 'Despesas',
-            data: {{ summary_month['items']|map(attribute='total')|list|tojson }},
-            backgroundColor: '#2563eb'
-        }]
-    },
-    options: chartOptions
-});
-</script>
 {% endblock %}

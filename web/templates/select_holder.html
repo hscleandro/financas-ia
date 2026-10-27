@@ -3,22 +3,22 @@
 {% block title %}Selecionar titular - Finanças IA{% endblock %}
 
 {% block content %}
-<h2>Selecionar titular/cartão</h2>
+<h1>Selecionar titular/cartão</h1>
+<p class="sub">A fatura contém lançamentos de mais de um titular. Selecione qual deseja processar.</p>
 
 <div class="card">
-    <p>A fatura contém lançamentos de mais de um titular. Selecione qual deseja processar:</p>
-
     <form method="get" action="/revisar-fatura/{{ statement_id }}">
         {% for holder in holders %}
-        <div class="item-row">
-            <label>
-                <input type="radio" name="card_last_four" value="{{ holder.last_four }}" required>
-                {{ holder.name or 'Titular não identificado' }} — final {{ holder.last_four }}
-            </label>
+        <div class="expense" style="margin-bottom: 0.75rem;">
+            <input type="radio" name="card_last_four" value="{{ holder.last_four }}" required>
+            <div>
+                <div class="name">{{ holder.name or 'Titular não identificado' }}</div>
+                <div class="date">Final do cartão: {{ holder.last_four }}</div>
+            </div>
         </div>
         {% endfor %}
 
-        <button type="submit" class="btn">Continuar</button>
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Continuar</button>
     </form>
 </div>
 {% endblock %}
