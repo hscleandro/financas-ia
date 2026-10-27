@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Finanças IA Web{% endblock %}</title>
+    {% block styles %}
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -558,6 +559,8 @@
             box-shadow: 0 8px 22px #0007;
         }
 
+        .section-gap { margin-top: 24px; }
+
         @media (max-width: 480px) {
             .stats { grid-template-columns: repeat(2, 1fr); }
             .summary-cards { grid-template-columns: 1fr; }
@@ -579,10 +582,12 @@
             }
         }
     </style>
+    {% endblock %}
     {% block extra_head %}{% endblock %}
 </head>
 <body>
-    <main>
+    <main class="{% block main_class %}{% endblock %}">
+        {% block header %}
         {% if user %}
         <header>
             <div>
@@ -593,6 +598,7 @@
             <div class="pill">☻ Minha Conta</div>
         </header>
         {% endif %}
+        {% endblock %}
 
         {% if request.session.get('flash') %}
         <div class="flash">{{ request.session.pop('flash') }}</div>
@@ -600,5 +606,6 @@
 
         {% block content %}{% endblock %}
     </main>
+    {% block scripts %}{% endblock %}
 </body>
 </html>
