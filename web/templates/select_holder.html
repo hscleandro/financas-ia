@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Selecionar cartões - Finanças IA{% endblock %}
+
+{% block content %}
+<h1>Selecionar cartões</h1>
+<p class="sub">A fatura contém lançamentos de mais de um cartão. Selecione quais deseja processar.</p>
+
+<div class="card">
+    <form method="post" action="/selecionar-cartoes">
+        <p class="section-info">Selecione os cartões:</p>
+
+        {% for holder in holders %}
+        <div class="expense" style="margin-bottom: 0.75rem;">
+            <input type="checkbox" name="selected_cards" value="{{ holder.last_four }}" id="card_{{ holder.last_four }}">
+            <label for="card_{{ holder.last_four }}" style="margin:0;cursor:pointer;">
+                <div class="name">{{ holder.name or 'Titular não identificado' }}</div>
+                <div class="date">Final do cartão: {{ holder.last_four }}</div>
+            </label>
+        </div>
+        {% endfor %}
+
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Continuar</button>
+    </form>
+</div>
+{% endblock %}

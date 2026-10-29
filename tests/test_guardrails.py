@@ -54,10 +54,10 @@ def _safe_call(tc_id: str = "tc1") -> dict:
 
 
 @pytest.fixture
-def service(test_db):
+def service(test_db, test_user):
     """Fixture que retorna um ExpenseService com conexão aberta."""
     conn = get_connection()
-    yield ExpenseService(conn, user_id=None)
+    yield ExpenseService(conn, user_id=test_user["id"])
     conn.close()
 
 

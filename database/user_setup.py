@@ -39,3 +39,17 @@ def get_user_by_telegram_id(conn: sqlite3.Connection, telegram_id: int) -> Optio
     ).fetchone()
 
     return dict(row) if row else None
+
+
+def create_or_update_user(
+    conn: sqlite3.Connection,
+    telegram_id: int,
+    name: Optional[str] = None,
+    is_active: bool = True,
+) -> dict:
+    """Cria um usuário ou retorna o existente pelo telegram_id."""
+    existing = get_user_by_telegram_id(conn, telegram_id)
+    if existing:
+        return existing
+    user_id = create_user(conn, telegram_id, name, is_active)
+    return get_user_by_telegram_id(conn, telegram_id)

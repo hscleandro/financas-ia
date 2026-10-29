@@ -23,13 +23,27 @@ def test_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def sample_expenses(test_db):
+def test_user(test_db):
+    """Cria um usuário de teste e retorna seus dados."""
+    from database.setup import get_connection
+    from database.user_setup import create_user
+
+    conn = get_connection()
+    user_id = create_user(conn, telegram_id=999999999, name="Test User")
+    conn.close()
+
+    return {"id": user_id, "telegram_id": 999999999, "name": "Test User"}
+
+
+@pytest.fixture
+def sample_expenses(test_db, test_user):
     """Popula o banco com 6 gastos de exemplo."""
     from database.setup import get_connection
     from services.expense_service import ExpenseService
 
     conn = get_connection()
     cursor = conn.cursor()
+    user_id = test_user["id"]
 
     expenses_data = [
         (55.00,  "almoço no restaurante", "Alimentação", "dinheiro",     "2026-05-10"),
@@ -45,9 +59,9 @@ def sample_expenses(test_db):
     for amount, desc, cat, method, expense_date in expenses_data:
         hash_val = compute_hash(amount, desc, date_class.fromisoformat(expense_date))
         cursor.execute(
-            "INSERT INTO expenses (amount, description, category, method, expense_date, hash) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (amount, desc, cat, method, expense_date, hash_val),
+            "INSERT INTO expenses (user_id, amount, description, category, method, expense_date, hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, amount, desc, cat, method, expense_date, hash_val),
         )
 
     conn.commit()
@@ -57,13 +71,13 @@ def sample_expenses(test_db):
 
 
 @pytest.fixture
-def inserted_expense(test_db):
+def inserted_expense(test_db, test_user):
     """Insere uma despesa via ExpenseService e retorna seu ID."""
     from database.setup import get_connection
     from services.expense_service import ExpenseService
 
     conn = get_connection()
-    service = ExpenseService(conn, user_id=None)
+    service = ExpenseService(conn, user_id=test_user["id"])
     result = service.record_expense(55.0, "almoço no restaurante", "Alimentação", "dinheiro", "2026-05-10")
     assert "id" in result, f"Falha ao inserir despesa de teste: {result}"
     return result["id"]

@@ -23,9 +23,9 @@ class TestQueryExpensesWithKeyword:
         yield
 
     @pytest.fixture
-    def service(self, test_db):
+    def service(self, test_db, test_user):
         conn = get_connection()
-        return ExpenseService(conn, user_id=None)
+        return ExpenseService(conn, user_id=test_user["id"])
 
     def test_keyword_exact_match(self, service):
         """Testa busca por keyword com match exato."""

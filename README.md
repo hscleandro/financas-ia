@@ -4,6 +4,7 @@ Sistema de gerenciamento de finanças pessoais com IA, integrado ao Telegram. Pe
 
 ## 📋 Funcionalidades
 
+### Telegram Bot
 - 💬 Interface conversacional via Telegram Bot
 - 💰 Registro de despesas com confirmação HITL (Human-in-the-Loop)
 - 📊 Consultas e análises de gastos
@@ -11,6 +12,15 @@ Sistema de gerenciamento de finanças pessoais com IA, integrado ao Telegram. Pe
 - 👥 Multi-tenant com isolamento de dados por usuário
 - 🔒 Whitelist de segurança (apenas usuários autorizados)
 - 🤖 IA integrada via LangGraph + OpenAI
+
+### Interface Web (V1)
+- 📊 Dashboard de despesas responsivo (categoria, forma de pagamento, evolução mensal)
+- 📥 Importação de fatura PDF do cartão Bradesco
+- 🔍 Seleção de titular/cartão e conciliação 1:1 com tolerância de ±2 dias
+- ✏️ Revisão em três seções: só na fatura, na fatura e no banco, só no banco
+- 🏷️ Definição de categoria por lançamento ao importar
+- ✅ Confirmação única com transação atômica e audit log
+- 🔒 Autenticação por senha mestre
 
 ## 🚀 Guia de Instalação e Configuração
 
@@ -113,7 +123,25 @@ Este comando vai:
 - ✅ Adicionar você como usuário autorizado
 - ✅ Retornar seu `user_id` interno
 
-### 8. Executar o Bot
+### 8. Executar a Interface Web (V1)
+
+```bash
+# Adicione ao .env
+WEB_AUTH_PASSWORD=senha-forte-aqui
+WEB_SESSION_SECRET=segredo-aleatorio-longo-aqui
+WEB_PORT=8080
+
+# Aplique migrations
+alembic upgrade head
+
+# Inicie a aplicação web
+source venv/bin/activate
+uvicorn web.main:app --host 0.0.0.0 --port 8080
+```
+
+Acesse `http://localhost:8080` no navegador e faça login com a senha definida.
+
+### 9. Executar o Bot
 
 #### Opção A: Usando o Script de Controle (Recomendado)
 
@@ -367,7 +395,15 @@ financas-ia/
 ├── migrations/                # Alembic migrations
 │   └── versions/
 ├── services/                  # Service Layer
-│   └── expense_service.py     # Lógica de negócio
+│   ├── expense_service.py     # Lógica de negócio de despesas
+│   ├── income_service.py      # Lógica de negócio de receitas
+│   ├── statement_parser.py    # Parser de fatura PDF Bradesco
+│   └── statement_service.py   # Conciliação de faturas
+├── web/                       # Interface web V1
+│   ├── main.py                # App FastAPI
+│   ├── auth.py                # Autenticação
+│   ├── templates/             # Templates Jinja2
+│   └── static/                # CSS/JS/uploads
 ├── tests/                     # Testes
 ├── data/                      # Dados persistentes (volumes)
 │   ├── financas.db            # Banco principal

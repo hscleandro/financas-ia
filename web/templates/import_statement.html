@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Importar fatura - Finanças IA{% endblock %}
+
+{% block content %}
+<h1>Importar fatura Bradesco</h1>
+<p class="sub">Envie o PDF da fatura do seu cartão Bradesco.</p>
+
+<div class="card">
+    <form method="post" action="/importar-fatura" enctype="multipart/form-data">
+        <label for="file">Arquivo PDF da fatura</label>
+        <input type="file" id="file" name="file" accept=".pdf" required>
+
+        <p class="muted" style="font-size: 12px; margin: 0.5rem 0 1rem;">
+            Se a fatura contiver mais de um cartão, você poderá selecionar quais deseja processar na próxima tela.
+        </p>
+
+        <button type="submit" class="btn btn-primary">Processar fatura</button>
+    </form>
+</div>
+{% endblock %}

@@ -1,13 +1,13 @@
 from typing import Annotated
 
 from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage, trim_messages
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 from typing_extensions import TypedDict
 
+from agent.model_factory import create_chat_model
 from agent.prompts_telegram import get_telegram_system_prompt
 from config import settings
 
@@ -129,11 +129,7 @@ def build_graph(tools: list, checkpointer=None):
         tools: Lista de tools do LangChain
         checkpointer: AsyncSqliteSaver para persistência
     """
-    llm = ChatOpenAI(
-        model=settings.openai_model,
-        temperature=0,
-        api_key=settings.openai_api_key,
-    )
+    llm = create_chat_model()
     llm_with_tools = llm.bind_tools(tools)
 
     system_prompt = get_telegram_system_prompt()

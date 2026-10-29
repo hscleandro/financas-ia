@@ -16,5 +16,11 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str = "change-me-in-production"
     telegram_webhook_url: str = ""
 
+    # Web V1
+    web_auth_password: str = ""
+    web_session_secret: str = "change-me-in-production"
+    web_host: str = "0.0.0.0"
+    web_port: int = 8080
+
 
 settings = Settings()

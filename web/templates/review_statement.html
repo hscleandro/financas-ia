@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Revisar conciliação - Finanças IA{% endblock %}
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', path='/reconciliation.css') }}">
+{% endblock %}
+{% block main_class %}app{% endblock %}
+
+{% block header %}
+<header>
+    <div class="brand-navigation">
+        <a class="back" id="back" href="/" aria-label="Voltar à página anterior" title="Voltar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </a>
+        <div class="logo">Finanças <b>IA</b></div>
+    </div>
+    {% include "account_menu.html" %}
+</header>
+{% endblock %}
+
+{% block content %}
+<h1>Revisar conciliação</h1>
+<p class="sub">Confira os lançamentos e revise no seu ritmo.</p>
+<div id="warnings" aria-live="polite"></div>
+<div class="stats" id="stats" aria-label="Seções da conciliação">
+    {% for section, label in [('new', 'Só na fatura'), ('matched', 'Conciliados'), ('bank', 'Só no banco')] %}
+    <button type="button" class="stat{% if loop.first %} active{% endif %}" data-section="{{ section }}" aria-pressed="{{ 'true' if loop.first else 'false' }}" aria-controls="items">
+        <strong id="count-{{ section }}">{{ review_data.state.counts[section] }}</strong>
+        <small>{{ label }}</small>
+    </button>
+    {% endfor %}
+</div>
+<div class="progress">
+    <div class="progress-top">
+        <span id="progress-label">Progresso da revisão</span>
+        <strong id="progress-count">{{ review_data.state.progress.reviewed }} de {{ review_data.state.progress.total }} revisados</strong>
+    </div>
+    <div class="track" role="progressbar" aria-label="Progresso da revisão" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ review_data.state.progress.percent }}" id="progress-track">
+        <div class="fill" id="progress-fill" style="width: {{ review_data.state.progress.percent }}%"></div>
+    </div>
+    <div class="progress-totals" id="progress-totals" aria-live="polite">{{ review_data.state.progress.approved }} aprovados · {{ review_data.state.progress.ignored }} ignorados · {{ review_data.state.progress.pending }} pendentes</div>
+</div>
+<div class="tools">
+    <span class="section-info" id="section-info">Selecione as compras que deseja inserir e confira as categorias.</span>
+    <button type="button" class="link" id="select-all">Selecionar todos</button>
+</div>
+<div id="items" aria-label="Lançamentos pendentes"></div>
+<noscript><p class="empty">Ative o JavaScript para selecionar e revisar os lançamentos.</p></noscript>
+<details class="history" id="history">
+    <summary id="history-title">Histórico de decisões ({{ review_data.state.history|length }})</summary>
+    <div id="history-items"></div>
+</details>
+<p class="hint">As decisões e categorias são salvas no banco de dados. Você pode sair e continuar depois.</p>
+<div class="footer">
+    <div aria-live="polite">
+        <small id="selected-count">0 selecionados</small>
+        <strong id="selected-sum">R$ 0,00</strong>
+    </div>
+    <div class="actions">
+        <button type="button" class="btn secondary" id="ignore" disabled>Ignorar selecionados</button>
+        <button type="button" class="btn" id="approve" disabled>Aprovar selecionados</button>
+    </div>
+</div>
+<div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+<script id="reconciliation-data" type="application/json">{{ review_data|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', path='/reconciliation.js') }}" defer></script>
+{% endblock %}
