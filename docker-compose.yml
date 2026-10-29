@@ -22,16 +22,13 @@ services:
       DATABASE_PATH: /app/data/financas.db
       CHECKPOINTS_PATH: /app/data/checkpoints.db
 
+      # Web V1
+      WEB_AUTH_PASSWORD: ${WEB_AUTH_PASSWORD}
+      WEB_SESSION_SECRET: ${WEB_SESSION_SECRET}
+
     volumes:
       # Persistir banco de dados
       - ./data:/app/data
-
-      # Desenvolvimento: hot reload (comentar em produção)
-      # - .:/app
-
-    ports:
-      # Expor porta 8000 apenas para modo webhook
-      - "8000:8000"
 
     restart: unless-stopped
 
@@ -42,3 +39,50 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  financas-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: financas-ia-web
+    command: uvicorn web.main:app --host 0.0.0.0 --port 8080
+    environment:
+      # API Keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+
+      # Banco de dados (caminhos dentro do container)
+      DATABASE_PATH: /app/data/financas.db
+      CHECKPOINTS_PATH: /app/data/checkpoints.db
+
+      # Web V1
+      WEB_AUTH_PASSWORD: ${WEB_AUTH_PASSWORD}
+      WEB_SESSION_SECRET: ${WEB_SESSION_SECRET}
+
+    volumes:
+      # Persistir banco de dados
+      - ./data:/app/data
+
+    ports:
+      # Disponível apenas no host para o nginx
+      - "127.0.0.1:8080:8080"
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/login', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  nginx:
+    image: nginx:alpine
+    container_name: financas-ia-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - financas-web
+    restart: unless-stopped
