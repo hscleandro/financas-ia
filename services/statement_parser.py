@@ -53,6 +53,7 @@ class ParsedTransaction:
     ambiguous: bool = False
     is_credit: bool = False
     raw_line: str = ""
+    selected_category: Optional[str] = None
 
 
 @dataclass

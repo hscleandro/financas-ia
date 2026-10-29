@@ -1,317 +1,70 @@
 {% extends "base.html" %}
 
 {% block title %}Revisar conciliação - Finanças IA{% endblock %}
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', path='/reconciliation.css') }}">
+{% endblock %}
+{% block main_class %}app{% endblock %}
+
+{% block header %}
+<header>
+    <div class="brand-navigation">
+        <a class="back" id="back" href="/" aria-label="Voltar à página anterior" title="Voltar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </a>
+        <div class="logo">Finanças <b>IA</b></div>
+    </div>
+    {% include "account_menu.html" %}
+</header>
+{% endblock %}
 
 {% block content %}
-{% set all_statement = [] %}
-{% set all_matched = [] %}
-{% set all_database = [] %}
-{% for card, section in sections.items() %}
-    {% for tx in section.only_on_statement %}
-        {% set _ = all_statement.append((card, tx)) %}
-    {% endfor %}
-    {% for pair in section.matched %}
-        {% set _ = all_matched.append((card, pair)) %}
-    {% endfor %}
-    {% for exp in section.only_on_database %}
-        {% set _ = all_database.append((card, exp)) %}
-    {% endfor %}
-{% endfor %}
-
 <h1>Revisar conciliação</h1>
-<p class="sub">Confira os lançamentos antes de atualizar seus gastos.</p>
-
-{% if warnings %}
-{% for w in warnings %}
-<div class="flash warning">⚠️ {{ w }}</div>
-{% endfor %}
-{% endif %}
-
-<div class="summary-cards">
-    <button type="button" class="summary-card active" data-section="statement">
-        <strong id="count-statement">{{ all_statement|length }}</strong>
-        <span>Só na fatura</span>
+<p class="sub">Confira os lançamentos e revise no seu ritmo.</p>
+<div id="warnings" aria-live="polite"></div>
+<div class="stats" id="stats" aria-label="Seções da conciliação">
+    {% for section, label in [('new', 'Só na fatura'), ('matched', 'Conciliados'), ('bank', 'Só no banco')] %}
+    <button type="button" class="stat{% if loop.first %} active{% endif %}" data-section="{{ section }}" aria-pressed="{{ 'true' if loop.first else 'false' }}" aria-controls="items">
+        <strong id="count-{{ section }}">{{ review_data.state.counts[section] }}</strong>
+        <small>{{ label }}</small>
     </button>
-    <button type="button" class="summary-card" data-section="matched">
-        <strong id="count-matched">{{ all_matched|length }}</strong>
-        <span>Conciliados</span>
-    </button>
-    <button type="button" class="summary-card" data-section="database">
-        <strong id="count-database">{{ all_database|length }}</strong>
-        <span>Só no banco</span>
-    </button>
+    {% endfor %}
 </div>
-
-<p class="section-hint">Selecione uma categoria e clique em Aprovar para cada lançamento.</p>
-
-<div id="panel-statement" class="section-panel active">
-    <h4 class="section-heading" style="color:var(--mint);">Só na fatura</h4>
-    {% if all_statement %}
-        {% for card, tx in all_statement %}
-        <div class="expense" data-tx-id="{{ tx.id }}" data-type="insert">
-            <div class="expense-main">
-                <div class="expense-info">
-                    <div class="name" title="{{ tx.description }}">{{ tx.description }}</div>
-                    <div class="date">{{ tx.transaction_date.strftime('%d/%m/%Y') }}
-                        {% if tx.installment_info %}· Parcela {{ tx.installment_info }}{% endif %}
-                        {% if card and card != 'não identificado' %}· Cartão final {{ card }}{% endif %}
-                    </div>
-                </div>
-                <div class="amount">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</div>
-            </div>
-            <select class="category-select" data-tx-id="{{ tx.id }}">
-                <option value="">Selecionar categoria</option>
-                {% for cat in categories %}
-                <option value="{{ cat }}" {% if tx.selected_category == cat %}selected{% endif %}>{{ cat }}</option>
-                {% endfor %}
-            </select>
-            <div class="expense-actions">
-                <button type="button" class="btn btn-primary btn-approve" data-tx-id="{{ tx.id }}" data-type="insert">✓ Aprovar</button>
-                <button type="button" class="btn btn-secondary btn-reject" data-tx-id="{{ tx.id }}">✕</button>
-            </div>
-        </div>
-        {% endfor %}
-    {% else %}
-        <p class="section-info">Nenhum lançamento novo.</p>
-    {% endif %}
+<div class="progress">
+    <div class="progress-top">
+        <span id="progress-label">Progresso da revisão</span>
+        <strong id="progress-count">{{ review_data.state.progress.reviewed }} de {{ review_data.state.progress.total }} revisados</strong>
+    </div>
+    <div class="track" role="progressbar" aria-label="Progresso da revisão" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ review_data.state.progress.percent }}" id="progress-track">
+        <div class="fill" id="progress-fill" style="width: {{ review_data.state.progress.percent }}%"></div>
+    </div>
+    <div class="progress-totals" id="progress-totals" aria-live="polite">{{ review_data.state.progress.approved }} aprovados · {{ review_data.state.progress.ignored }} ignorados · {{ review_data.state.progress.pending }} pendentes</div>
 </div>
-
-<div id="panel-matched" class="section-panel">
-    <h4 class="section-heading" style="color:var(--blue);">Conciliados</h4>
-    {% if all_matched %}
-        {% for card, pair in all_matched %}
-        <div class="expense" data-tx-id="{{ pair.statement_tx.id }}" data-type="match" data-expense-id="{{ pair.expense.id }}">
-            <div class="expense-main">
-                <div class="expense-info">
-                    <div class="name" title="{{ pair.statement_tx.description }}">{{ pair.statement_tx.description }}</div>
-                    <div class="date">Fatura: {{ pair.statement_tx.transaction_date.strftime('%d/%m/%Y') }} · Banco: {{ pair.expense.expense_date.strftime('%d/%m/%Y') }}
-                        {% if card and card != 'não identificado' %}· Cartão final {{ card }}{% endif %}
-                    </div>
-                </div>
-                <div class="amount">R$ {{ "%.2f"|format(pair.statement_tx.amount_cents / 100) }}</div>
-            </div>
-            <div class="expense-actions">
-                <button type="button" class="btn btn-primary btn-approve" data-tx-id="{{ pair.statement_tx.id }}" data-type="match" data-expense-id="{{ pair.expense.id }}">✓ Confirmar</button>
-                <button type="button" class="btn btn-secondary btn-reject" data-tx-id="{{ pair.statement_tx.id }}">✕</button>
-            </div>
-        </div>
-        {% endfor %}
-    {% else %}
-        <p class="section-info">Nenhuma correspondência.</p>
-    {% endif %}
+<div class="tools">
+    <span class="section-info" id="section-info">Selecione as compras que deseja inserir e confira as categorias.</span>
+    <button type="button" class="link" id="select-all">Selecionar todos</button>
 </div>
-
-<div id="panel-database" class="section-panel">
-    <h4 class="section-heading" style="color:var(--danger);">Só no banco</h4>
-    {% if all_database %}
-        {% for card, exp in all_database %}
-        <div class="expense" data-expense-id="{{ exp.id }}" data-type="review">
-            <div class="expense-main">
-                <div class="expense-info">
-                    <div class="name" title="{{ exp.description }}">{{ exp.description }}</div>
-                    <div class="date">{{ exp.expense_date.strftime('%d/%m/%Y') }} · {{ exp.category }} · {{ exp.method }}
-                        {% if card and card != 'não identificado' %}· Cartão final {{ card }}{% endif %}
-                    </div>
-                </div>
-                <div class="amount">R$ {{ "%.2f"|format(exp.amount) }}</div>
-            </div>
-            <div class="expense-actions">
-                <button type="button" class="btn btn-secondary btn-approve" data-expense-id="{{ exp.id }}" data-type="review">✓ Revisado</button>
-            </div>
-        </div>
-        {% endfor %}
-    {% else %}
-        <p class="section-info">Nenhum registro sem correspondência.</p>
-    {% endif %}
-</div>
-
-{% if ambiguous %}
-<h3 class="section-title">Ambiguidades</h3>
-<p class="section-info">Múltiplos registros no banco correspondem ao mesmo lançamento.</p>
-{% for tx, candidates in ambiguous %}
-<div class="expense">
-    <div class="expense-main">
-        <div class="expense-info">
-            <div class="name" title="{{ tx.description }}">{{ tx.description }}</div>
-            <div class="date">{{ tx.transaction_date.strftime('%d/%m/%Y') }}</div>
-        </div>
-        <div class="amount">R$ {{ "%.2f"|format(tx.amount_cents / 100) }}</div>
+<div id="items" aria-label="Lançamentos pendentes"></div>
+<noscript><p class="empty">Ative o JavaScript para selecionar e revisar os lançamentos.</p></noscript>
+<details class="history" id="history">
+    <summary id="history-title">Histórico de decisões ({{ review_data.state.history|length }})</summary>
+    <div id="history-items"></div>
+</details>
+<p class="hint">As decisões e categorias são salvas no banco de dados. Você pode sair e continuar depois.</p>
+<div class="footer">
+    <div aria-live="polite">
+        <small id="selected-count">0 selecionados</small>
+        <strong id="selected-sum">R$ 0,00</strong>
+    </div>
+    <div class="actions">
+        <button type="button" class="btn secondary" id="ignore" disabled>Ignorar selecionados</button>
+        <button type="button" class="btn" id="approve" disabled>Aprovar selecionados</button>
     </div>
 </div>
-{% for cand in candidates %}
-<div class="expense" style="margin-left: 2rem;" data-tx-id="{{ tx.id }}" data-type="match" data-expense-id="{{ cand.id }}">
-    <div class="expense-main">
-        <div class="expense-info">
-            <div class="name" title="{{ cand.description }}">{{ cand.description }}</div>
-            <div class="date">Banco: {{ cand.expense_date.strftime('%d/%m/%Y') }}</div>
-        </div>
-        <div class="amount">R$ {{ "%.2f"|format(cand.amount) }}</div>
-    </div>
-    <div class="expense-actions">
-        <button type="button" class="btn btn-primary btn-approve" data-tx-id="{{ tx.id }}" data-type="match" data-expense-id="{{ cand.id }}">✓ Confirmar este</button>
-    </div>
-</div>
-{% endfor %}
-{% endfor %}
-{% endif %}
+<div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+<script id="reconciliation-data" type="application/json">{{ review_data|tojson }}</script>
+{% endblock %}
 
-<script>
-const statementId = {{ statement_id }};
-
-async function updateCategory(txId, category) {
-    await fetch(`/api/update-category/${txId}`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `category=${encodeURIComponent(category)}`
-    });
-}
-
-async function approveInsert(txId, category) {
-    const res = await fetch(`/api/approve-insert/${txId}`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `category=${encodeURIComponent(category)}`
-    });
-    return res.ok;
-}
-
-async function approveMatch(txId, expenseId) {
-    const res = await fetch(`/api/approve-match/${txId}/${expenseId}`, {method: 'POST'});
-    return res.ok;
-}
-
-async function approveReview(expenseId) {
-    const res = await fetch(`/api/approve-review/${expenseId}`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `statement_id=${statementId}`
-    });
-    return res.ok;
-}
-
-async function reject(txId) {
-    const res = await fetch(`/api/reject/${txId}`, {method: 'POST'});
-    return res.ok;
-}
-
-function removeElement(el) {
-    el.style.transition = 'opacity 0.25s, transform 0.25s';
-    el.style.opacity = '0';
-    el.style.transform = 'translateX(16px)';
-    setTimeout(() => {
-        el.remove();
-        updateEmptyStates();
-    }, 250);
-}
-
-function decrementCounter(section) {
-    const counter = document.getElementById(`count-${section}`);
-    if (counter) {
-        counter.textContent = Math.max(0, parseInt(counter.textContent, 10) - 1);
-    }
-}
-
-function getSectionFromPanel(panel) {
-    if (panel.id === 'panel-statement') return 'statement';
-    if (panel.id === 'panel-matched') return 'matched';
-    if (panel.id === 'panel-database') return 'database';
-    return null;
-}
-
-function updateEmptyStates() {
-    ['statement', 'matched', 'database'].forEach(section => {
-        const panel = document.getElementById(`panel-${section}`);
-        const hasItems = panel.querySelector('.expense[data-tx-id], .expense[data-expense-id]');
-        let emptyMsg = panel.querySelector('.section-info');
-        if (!hasItems && !emptyMsg) {
-            emptyMsg = document.createElement('p');
-            emptyMsg.className = 'section-info';
-            const labels = {
-                statement: 'Nenhum lançamento novo.',
-                matched: 'Nenhuma correspondência.',
-                database: 'Nenhum registro sem correspondência.'
-            };
-            emptyMsg.textContent = labels[section];
-            panel.appendChild(emptyMsg);
-        }
-    });
-}
-
-function showSection(section) {
-    document.querySelectorAll('.summary-card').forEach(card => {
-        card.classList.toggle('active', card.dataset.section === section);
-    });
-    document.querySelectorAll('.section-panel').forEach(panel => {
-        panel.classList.toggle('active', panel.id === `panel-${section}`);
-    });
-}
-
-document.querySelectorAll('.summary-card').forEach(card => {
-    card.addEventListener('click', () => showSection(card.dataset.section));
-});
-
-document.querySelectorAll('.category-select').forEach(sel => {
-    sel.addEventListener('change', () => updateCategory(sel.dataset.txId, sel.value));
-    if (!sel.value) {
-        fetch(`/api/suggest-category/${sel.dataset.txId}`)
-            .then(r => r.json())
-            .then(data => {
-                if (data.category) {
-                    sel.value = data.category;
-                    updateCategory(sel.dataset.txId, data.category);
-                }
-            })
-            .catch(() => {});
-    }
-});
-
-document.querySelectorAll('.btn-approve').forEach(btn => {
-    btn.addEventListener('click', async () => {
-        const type = btn.dataset.type;
-        const txId = btn.dataset.txId;
-        const expenseId = btn.dataset.expenseId;
-        let ok = false;
-
-        if (type === 'insert') {
-            const card = btn.closest('.expense');
-            const sel = card.querySelector('.category-select');
-            if (!sel.value) {
-                alert('Selecione uma categoria.');
-                return;
-            }
-            ok = await approveInsert(txId, sel.value);
-        } else if (type === 'match') {
-            ok = await approveMatch(txId, expenseId);
-        } else if (type === 'review') {
-            ok = await approveReview(expenseId);
-        }
-
-        if (ok) {
-            const expenseEl = btn.closest('.expense');
-            const panel = expenseEl.closest('.section-panel');
-            const section = getSectionFromPanel(panel);
-            removeElement(expenseEl);
-            decrementCounter(section);
-        } else {
-            alert('Erro ao aprovar. Tente novamente.');
-        }
-    });
-});
-
-document.querySelectorAll('.btn-reject').forEach(btn => {
-    btn.addEventListener('click', async () => {
-        const txId = btn.dataset.txId;
-        const ok = await reject(txId);
-        if (ok) {
-            const expenseEl = btn.closest('.expense');
-            const panel = expenseEl.closest('.section-panel');
-            const section = getSectionFromPanel(panel);
-            removeElement(expenseEl);
-            decrementCounter(section);
-        } else {
-            alert('Erro ao rejeitar. Tente novamente.');
-        }
-    });
-});
-</script>
+{% block scripts %}
+<script src="{{ url_for('static', path='/reconciliation.js') }}" defer></script>
 {% endblock %}

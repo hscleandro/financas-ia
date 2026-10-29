@@ -1,16 +1,18 @@
-"""Aplicação web responsiva do Finanças IA — V1.1.
+"""Aplicação web responsiva do Finanças IA.
 
 Entrypoint: uvicorn web.main:app --host 0.0.0.0 --port 8080
 
-A V1.1 introduz:
-- Aprovação individual de lançamentos
-- Persistência de progresso
+A conciliação oferece:
+- Aprovação e ignorar em lotes transacionais e idempotentes
+- Persistência de progresso, categorias e histórico
 - Seleção de múltiplos cartões
-- Sugestão automática de categoria
+- Preservação das descrições originais da fatura e do Telegram
+- Sugestão automática de categoria pelo histórico e pelo agente
 """
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from alembic import command
 from alembic.config import Config
@@ -18,6 +20,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from starlette.middleware.sessions import SessionMiddleware
 
 from config import settings
@@ -25,6 +28,7 @@ from database.setup import get_connection
 from services.expense_service import ExpenseService
 from services.statement_service import StatementService
 from web.auth import _resolve_default_user, check_password, get_current_user
+from web.dashboard import build_dashboard_data
 
 BASE_DIR = Path(__file__).parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -67,12 +71,18 @@ def _save_upload(file: UploadFile) -> Path:
 
 def _get_expense_service(user: dict = Depends(get_current_user)):
     conn = get_connection()
-    return ExpenseService(conn, user_id=user["id"])
+    try:
+        yield ExpenseService(conn, user_id=user["id"])
+    finally:
+        conn.close()
 
 
 def _get_statement_service(user: dict = Depends(get_current_user)):
     conn = get_connection()
-    return StatementService(conn, user_id=user["id"])
+    try:
+        yield StatementService(conn, user_id=user["id"])
+    finally:
+        conn.close()
 
 
 def _referer_or_dashboard(request: Request) -> str:
@@ -106,35 +116,18 @@ async def logout(request: Request):
 # ─── Dashboard ───────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(
+def dashboard(
     request: Request,
+    period: str | None = None,
+    evolution_category: str | None = None,
     service: ExpenseService = Depends(_get_expense_service),
     statement_service: StatementService = Depends(_get_statement_service),
     user: dict = Depends(get_current_user),
 ):
-    from datetime import date
-
-    today = date.today()
-    start_of_month = today.replace(day=1)
-    end_of_month = today
-
-    summary_category = service.get_summary(
-        start_date=start_of_month.isoformat(),
-        end_date=end_of_month.isoformat(),
-        group_by="category",
-    )
-    summary_method = service.get_summary(
-        start_date=start_of_month.isoformat(),
-        end_date=end_of_month.isoformat(),
-        group_by="method",
-    )
-    summary_month = service.get_summary(
-        start_date=(today.replace(month=1, day=1)).isoformat(),
-        end_date=end_of_month.isoformat(),
-        group_by="month",
-    )
-
-    categories = service.list_categories()
+    try:
+        data = build_dashboard_data(service, period, evolution_category)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     pending = statement_service.get_pending_summary()
 
     return templates.TemplateResponse(
@@ -142,22 +135,24 @@ async def dashboard(
         {
             "request": request,
             "user": user,
-            "summary_category": summary_category,
-            "summary_method": summary_method,
-            "summary_month": summary_month,
-            "categories": categories,
-            "current_month": today.strftime("%B/%Y"),
+            "dashboard_data": data,
             "pending": pending,
         },
+        headers={"Cache-Control": "no-store"},
     )
 
 
 # ─── Importar fatura ─────────────────────────────────────────────────────────
 
 @app.get("/importar-fatura", response_class=HTMLResponse)
-async def import_statement_page(request: Request, user: dict = Depends(get_current_user)):
+async def import_statement_page(
+    request: Request,
+    service: StatementService = Depends(_get_statement_service),
+    user: dict = Depends(get_current_user),
+):
     return templates.TemplateResponse(
-        "import_statement.html", {"request": request, "user": user}
+        "import_statement.html",
+        {"request": request, "user": user, "pending": service.get_pending_summary()},
     )
 
 
@@ -192,6 +187,7 @@ async def import_statement(
                 "request": request,
                 "user": user,
                 "holders": cards,
+                "pending": service.get_pending_summary(),
             },
         )
 
@@ -211,7 +207,11 @@ async def import_statement(
 
 
 @app.get("/selecionar-cartoes", response_class=HTMLResponse)
-async def select_cards_page(request: Request, user: dict = Depends(get_current_user)):
+async def select_cards_page(
+    request: Request,
+    service: StatementService = Depends(_get_statement_service),
+    user: dict = Depends(get_current_user),
+):
     pending_path = request.session.get("pending_pdf_path")
     if not pending_path or not Path(pending_path).exists():
         return RedirectResponse(url="/importar-fatura", status_code=302)
@@ -225,6 +225,7 @@ async def select_cards_page(request: Request, user: dict = Depends(get_current_u
             "request": request,
             "user": user,
             "holders": preview.card_holders,
+            "pending": service.get_pending_summary(),
         },
     )
 
@@ -261,14 +262,17 @@ async def select_cards(
 # ─── Revisar fatura ──────────────────────────────────────────────────────────
 
 @app.get("/revisar-fatura/{statement_id}", response_class=HTMLResponse)
-async def review_statement(
+def review_statement(
     request: Request,
     statement_id: int,
     service: StatementService = Depends(_get_statement_service),
     expense_service: ExpenseService = Depends(_get_expense_service),
     user: dict = Depends(get_current_user),
 ):
-    result = service.reconcile(statement_id)
+    try:
+        state = service.get_review_state(statement_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     categories = expense_service.list_categories()
 
     return templates.TemplateResponse(
@@ -277,12 +281,80 @@ async def review_statement(
             "request": request,
             "user": user,
             "statement_id": statement_id,
-            "sections": result.sections,
-            "ambiguous": result.ambiguous,
-            "warnings": result.warnings,
-            "categories": categories,
+            "review_data": {"state": state, "categories": categories},
+            "pending": service.get_pending_summary(),
         },
+        headers={"Cache-Control": "no-store"},
     )
+
+
+class ReviewItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^(?:tx|expense):[1-9][0-9]*$")
+    category: str | None = Field(default=None, max_length=200)
+    expense_id: StrictInt | None = Field(default=None, gt=0)
+
+
+class ReviewBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section: Literal["new", "matched", "bank"]
+    action: Literal["approve", "ignore"]
+    items: list[ReviewItem] = Field(min_length=1, max_length=1000)
+    request_id: str = Field(min_length=1, max_length=128)
+
+
+class ReviewCategory(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^(?:tx|expense):[1-9][0-9]*$")
+    category: str = Field(max_length=200)
+
+
+@app.get("/api/reconciliation/{statement_id}")
+def reconciliation_state(
+    statement_id: int,
+    service: StatementService = Depends(_get_statement_service),
+    expense_service: ExpenseService = Depends(_get_expense_service),
+):
+    try:
+        state = service.get_review_state(statement_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return JSONResponse(
+        {"state": state, "categories": expense_service.list_categories()},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/reconciliation/{statement_id}/batch")
+def review_batch(
+    statement_id: int,
+    batch: ReviewBatch,
+    service: StatementService = Depends(_get_statement_service),
+):
+    try:
+        result = service.review_batch(
+            statement_id, batch.section, batch.action,
+            [item.model_dump(exclude_unset=True) for item in batch.items], batch.request_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/reconciliation/{statement_id}/category")
+def review_category(
+    statement_id: int,
+    selection: ReviewCategory,
+    service: StatementService = Depends(_get_statement_service),
+):
+    try:
+        result = service.update_review_category(statement_id, selection.id, selection.category)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse({key: result[key] for key in ("success", "updated", "category")})
 
 
 # ─── Aprovação individual ────────────────────────────────────────────────────
@@ -352,46 +424,54 @@ async def update_category(
 
 
 @app.get("/api/suggest-category/{tx_id}")
-async def suggest_category(
+def suggest_category(
     tx_id: int,
     service: StatementService = Depends(_get_statement_service),
     user: dict = Depends(get_current_user),
 ):
     from services.category_suggester import CategorySuggester
-    from database.setup import get_connection
 
-    conn = get_connection()
-    try:
-        tx_row = conn.execute(
-            """
-            SELECT st.description, cs.user_id
-            FROM statement_transactions st
-            JOIN card_statements cs ON cs.id = st.statement_id
-            WHERE st.id = ?
-            """,
-            (tx_id,),
-        ).fetchone()
-        if not tx_row or tx_row["user_id"] != user["id"]:
-            raise HTTPException(status_code=404, detail="Lançamento não encontrado.")
+    tx_row = service.conn.execute(
+        """SELECT st.statement_id FROM statement_transactions st
+           JOIN card_statements cs ON cs.id = st.statement_id
+           WHERE st.id = ? AND cs.user_id = ?""",
+        (tx_id, user["id"]),
+    ).fetchone()
+    if not tx_row:
+        raise HTTPException(status_code=404, detail="Lançamento não encontrado.")
+    state = service.get_review_state(tx_row["statement_id"])
+    item = next((item for item in state["items"] if item["tx_id"] == tx_id), None)
+    if not item:
+        raise HTTPException(status_code=409, detail="Lançamento já revisado.")
+    if item["category"] or item["category_edited"] or item["section"] != "new":
+        return JSONResponse({"category": item["category"]})
 
-        suggester = CategorySuggester(conn, user["id"])
-        category = suggester.suggest(tx_row["description"])
-        if category:
-            service.update_category(tx_id, category)
-        return JSONResponse({"category": category})
-    finally:
-        conn.close()
+    category = CategorySuggester(service.conn, user["id"]).suggest(item["name"])
+    if category:
+        try:
+            result = service.update_review_category(
+                tx_row["statement_id"], item["id"], category, only_if_empty=True,
+            )
+            category = result["category"]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse({"category": category}, headers={"Cache-Control": "no-store"})
 
 
 # ─── Extrato bancário (Em breve) ─────────────────────────────────────────────
 
 @app.get("/extrato-bancario", response_class=HTMLResponse)
-async def bank_statement_page(request: Request, user: dict = Depends(get_current_user)):
+async def bank_statement_page(
+    request: Request,
+    service: StatementService = Depends(_get_statement_service),
+    user: dict = Depends(get_current_user),
+):
     return templates.TemplateResponse(
         "coming_soon.html",
         {
             "request": request,
             "user": user,
+            "pending": service.get_pending_summary(),
             "title": "Importar extrato bancário",
             "message": "Em breve",
         },

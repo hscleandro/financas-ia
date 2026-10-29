@@ -1,0 +1,14 @@
+.account-menu { position: relative; flex-shrink: 0; }
+.account-menu > summary { display: flex; align-items: center; gap: 7px; min-height: 44px; padding: 10px 13px; border: 1px solid var(--edge, #273446); border-radius: 12px; background: #1c2836; color: var(--txt, #eef5fa); font-size: 14px; font-weight: 400; line-height: 1.5; white-space: nowrap; cursor: pointer; list-style: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.account-menu > summary::-webkit-details-marker { display: none; }
+.account-menu .account-indicator { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--mint); }
+.account-menu .account-options { position: absolute; top: calc(100% + 9px); right: 0; width: 256px; max-width: calc(100vw - 32px); padding: 7px; background: #1a2533; border: 1px solid #344456; border-radius: 14px; box-shadow: 0 16px 36px #0006; z-index: 5; }
+.account-menu .account-options a, .account-menu .menu-disabled { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 10px; border-radius: 8px; color: var(--txt, #eef5fa); text-decoration: none; font-size: 13px; line-height: 1.5; }
+.account-menu .account-options a:hover { background: #243746; }
+.account-menu summary:focus-visible, .account-menu a:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+.account-menu .menu-disabled { color: #7c8d9e; cursor: not-allowed; }
+.account-menu .pending-badge { border-radius: 7px; background: var(--mint); color: #09231d; padding: 2px 6px; font-size: 11px; font-weight: 750; }
+
+@media (max-width: 360px) {
+    .account-menu > summary { padding: 9px 8px; gap: 6px; font-size: 13px; }
+}

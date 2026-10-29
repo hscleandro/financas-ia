@@ -1,92 +1,139 @@
 {% extends "base.html" %}
 
-{% set show_back = false %}
+{% macro money(cents) -%}
+R$ {{ "{:,.2f}".format(cents / 100).replace(',', '_').replace('.', ',').replace('_', '.') }}
+{%- endmacro %}
 
-{% block title %}Dashboard - Finanças IA{% endblock %}
+{% block title %}Visão geral - Finanças IA{% endblock %}
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', path='/dashboard.css') }}">
+{% endblock %}
+{% block main_class %}dashboard{% endblock %}
+
+{% block header %}
+<header class="dashboard-header">
+    <a class="brand" href="/" aria-label="Finanças IA, início">
+        <svg class="brand-mark" width="23" height="23" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 2 10 10-10 10L2 12 12 2Z" stroke="currentColor" stroke-width="1.8"/><path d="m12 7 5 5-5 5-5-5 5-5Z" fill="currentColor"/></svg>
+        <span>Finanças <b>IA</b></span>
+    </a>
+    {% include "account_menu.html" %}
+</header>
+{% endblock %}
 
 {% block content %}
-<div class="between">
+<div class="dashboard-heading">
     <div>
-        <h1>Overview</h1>
-        <div class="muted">Seu dinheiro, de forma simples.</div>
+        <h1>Visão geral</h1>
+        <div class="muted subtitle">Seu dinheiro, de forma simples.</div>
     </div>
-    <select aria-label="Período" disabled>
-        <option>{{ current_month }}</option>
-    </select>
+    <form action="/" method="get" class="period-form" data-auto-submit>
+        {% if dashboard_data.evolution_category %}<input type="hidden" name="evolution_category" value="{{ dashboard_data.evolution_category }}">{% endif %}
+        <select aria-label="Período" name="period" id="period">
+            {% for option in dashboard_data.period_options %}
+            <option value="{{ option.value }}"{% if option.value == dashboard_data.period %} selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+        </select>
+        <noscript><button type="submit">Aplicar mês</button></noscript>
+    </form>
 </div>
 
-<div class="grid">
-    <section class="card">
+<div class="metrics">
+    <section class="card metric-card" aria-label="Despesas do mês">
         <div class="muted">Despesas do mês</div>
-        <div class="metric">R$ {{ "%.2f"|format(summary_category['total_geral']) }}</div>
-        <small class="muted">Neste mês</small>
+        <div class="metric" id="monthly-total">{{ money(dashboard_data.total_cents) }}</div>
+        {% set comparison = dashboard_data.comparison %}
+        {% if comparison.direction == 'no_base' %}
+        <small class="muted comparison" id="monthly-comparison">Sem gastos no mês anterior</small>
+        {% else %}
+        <small class="comparison {{ 'negative' if comparison.direction == 'up' else 'positive' if comparison.direction == 'down' else 'muted' }}" id="monthly-comparison" title="Comparação com o total do mês anterior. O mês atual considera os gastos registrados até hoje.">
+            {% if comparison.direction == 'up' %}↑{% elif comparison.direction == 'down' %}↓{% endif %}
+            {{ "%.1f"|format(comparison.percent|abs)|replace('.', ',') }}% vs. mês anterior
+        </small>
+        {% endif %}
     </section>
-    <section class="card">
+    <section class="card metric-card" aria-label="Lançamentos do mês">
         <div class="muted">Lançamentos</div>
-        <div class="metric">{{ summary_category['items']|sum(attribute='count') }}</div>
+        <div class="metric" id="monthly-count">{{ dashboard_data.expense_count }}</div>
         <small class="muted">Neste mês</small>
     </section>
 </div>
 
-<div class="actions">
-    <a href="/importar-fatura" class="btn btn-primary">＋ Importar fatura</a>
-    {% if pending.has_pending %}
-    <a href="/revisar-fatura/{{ pending.statement_id }}" class="btn btn-secondary">
-        ⇄ Revisar conciliação
-        <span style="background:var(--mint);color:#09231d;border-radius:10px;padding:2px 8px;margin-left:6px;font-size:11px;">{{ pending.pending_count }}</span>
-    </a>
-    {% else %}
-    <button class="btn btn-secondary" disabled title="Nenhuma conciliação pendente">⇄ Revisar conciliação</button>
-    {% endif %}
-    <a href="/extrato-bancario" class="btn btn-secondary">🏦 Importar extrato bancário</a>
-</div>
-
-<div class="layout">
-    <div class="card">
-        <h2>Por categoria</h2>
-        <div class="donut-wrap">
-            <div class="donut" id="donutCategory">
-                <div class="donut-center">
-                    <small>Total</small>
-                    <strong>R$ {{ "%.2f"|format(summary_category['total_geral']) }}</strong>
-                </div>
-            </div>
+<div class="dashboard-layout">
+    <section class="card evolution-card" id="evolucao-mensal" aria-labelledby="evolution-title">
+        <div class="card-heading">
+            <h2 id="evolution-title">Evolução mensal</h2>
+            <form action="/#evolucao-mensal" method="get" class="category-form" data-auto-submit>
+                <input type="hidden" name="period" value="{{ dashboard_data.period }}">
+                <select name="evolution_category" id="evolution-category" aria-label="Categoria da evolução mensal">
+                    <option value="">Todas as categorias</option>
+                    {% for category in dashboard_data.categories %}
+                    <option value="{{ category }}"{% if category == dashboard_data.evolution_category %} selected{% endif %}>{{ category }}</option>
+                    {% endfor %}
+                </select>
+                <noscript><button type="submit">Filtrar gráfico</button></noscript>
+            </form>
         </div>
-        <div class="legend">
-            {% for item in summary_category['items'] %}
-            <div>
-                <i style="background: {{ loop.cycle('#62e6ba', '#7daeff', '#c3a0ff', '#f7bb75', '#ff9caa', '#a8e6cf') }}"></i>
-                {{ item.dimension }}
-                <strong>R$ {{ "%.2f"|format(item.total) }}</strong>
+        <div class="muted chart-caption">Despesas dos últimos 6 meses</div>
+        <div class="bars" aria-label="Despesas por mês">
+            {% for month in dashboard_data.evolution %}
+            <div class="bar-column">
+                <button type="button" class="bar{% if not month.total_cents %} zero{% endif %}" style="height: {{ month.height_percent }}%" data-month="{{ month.full_label }}" data-total="{{ month.total_cents }}" aria-label="{{ month.full_label }}: {{ money(month.total_cents) }}" aria-describedby="evolution-value"></button>
+                <span class="bar-label">{{ month.label }}</span>
             </div>
             {% endfor %}
         </div>
-    </div>
+        <output class="chart-value muted" id="evolution-value" aria-live="polite">{% if not dashboard_data.evolution|sum(attribute='total_cents') %}Nenhuma despesa nesta seleção.{% endif %}</output>
+    </section>
 
-    <div class="card">
-        <h2>Por forma de pagamento</h2>
-        {% for item in summary_method['items'] %}
-        <div class="category-track">
-            <div class="between">
-                <span>{{ item.dimension }}</span>
-                <strong>R$ {{ "%.2f"|format(item.total) }}</strong>
-            </div>
-            <div class="track">
-                <div class="fill" style="width: {{ (item.total / (summary_method['items']|map(attribute='total')|max)) * 100 if item.total > 0 else 0 }}%"></div>
+    <section class="card categories-card" aria-labelledby="category-title">
+        <h2 id="category-title">Gastos por categoria</h2>
+        <div class="donut-wrap">
+            {% set gradient = namespace(offset=0) %}
+            <div class="donut" id="donut" tabindex="0" role="img" aria-label="Despesas por categoria em {{ dashboard_data.period_label }}: {{ money(dashboard_data.total_cents) }}" aria-describedby="donut-tip"{% if dashboard_data.category_parts %} style="background: conic-gradient({% for part in dashboard_data.category_parts %}{{ part.color }} {{ gradient.offset }}% {% set gradient.offset = gradient.offset + part.percent %}{{ gradient.offset if not loop.last else 100 }}%{{ ', ' if not loop.last else '' }}{% endfor %})"{% endif %}>
+                <div class="donut-center"><small>Total gasto</small><strong>{{ money(dashboard_data.total_cents) }}</strong></div>
+                <div id="donut-tip" class="donut-tip" role="status">{{ 'Toque em uma fatia para ver o valor' if dashboard_data.category_parts else 'Nenhuma despesa neste mês' }}</div>
             </div>
         </div>
-        {% endfor %}
-    </div>
-</div>
-
-<div class="card section-gap">
-    <h2>Evolução mensal</h2>
-    <div class="chart-bar-container">
-        {% for item in summary_month['items'] %}
-        <div class="bar" style="height: {{ (item.total / (summary_month['items']|map(attribute='total')|max)) * 100 if item.total > 0 else 0 }}%">
-            <span>{{ item.dimension.split('-')[1] }}/{{ item.dimension.split('-')[0][2:] }}</span>
+        <div class="legend" aria-label="Categorias do período">
+            {% for part in dashboard_data.category_parts %}
+            <button type="button" class="legend-entry" data-slice="{{ loop.index0 }}" aria-label="{{ part.name }}: {{ money(part.total_cents) }}, {{ '%.1f'|format(part.percent)|replace('.', ',') }} por cento">
+                <i style="background: {{ part.color }}" aria-hidden="true"></i><span>{{ part.name }}</span><strong>{{ "%.1f"|format(part.percent)|replace('.', ',') }}%</strong>
+            </button>
+            {% endfor %}
         </div>
-        {% endfor %}
-    </div>
+    </section>
+
+    <section class="card payments-card" aria-labelledby="payment-title">
+        <h2 id="payment-title">Métodos de pagamento</h2>
+        <div id="payments">
+            {% for method in dashboard_data.payment_methods %}
+            <div class="payment-method">
+                <div class="between"><span>{{ method.name }}</span><strong>{{ money(method.total_cents) }}</strong></div>
+                <div class="track"><div class="fill" style="width: {{ method.percent }}%"></div></div>
+            </div>
+            {% else %}<p class="empty-state">Nenhuma despesa neste mês.</p>{% endfor %}
+        </div>
+    </section>
+
+    <section class="card recent-card" aria-labelledby="recent-title">
+        <div class="card-heading">
+            <h2 id="recent-title">Últimos lançamentos</h2>
+            {% if dashboard_data.expenses|length > 3 %}<button type="button" class="text-link" id="show-all-expenses" aria-expanded="false" aria-controls="recent-expenses" hidden>Ver todos</button>{% endif %}
+        </div>
+        <div id="recent-expenses">
+            {% for expense in dashboard_data.expenses %}
+            <div class="item{% if loop.index > 3 %} recent-extra{% endif %}" data-expense-id="{{ expense.id }}">
+                <div class="bubble" aria-hidden="true"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/><path d="M9 7h6M9 11h6M9 15h3"/></svg></div>
+                <div class="expense-name"><strong title="{{ expense.description }}">{{ expense.description }}</strong><small><time datetime="{{ expense.date }}">{{ expense.date_label }}</time> · {{ expense.category }} · {{ expense.method }}</small></div>
+                <div class="amount">− {{ money(expense.amount_cents) }}</div>
+            </div>
+            {% else %}<p class="empty-state">Nenhum lançamento neste mês.</p>{% endfor %}
+        </div>
+    </section>
 </div>
+<script id="dashboard-data" type="application/json">{{ dashboard_data|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', path='/dashboard.js') }}" defer></script>
 {% endblock %}

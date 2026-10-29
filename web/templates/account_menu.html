@@ -1,0 +1,15 @@
+<details class="account-menu" id="account-menu">
+    <summary class="account-trigger" aria-label="Minha Conta, opções">
+        <span class="account-indicator" aria-hidden="true"></span>
+        Minha Conta
+    </summary>
+    <nav class="account-options" aria-label="Opções da conta">
+        <a href="/importar-fatura">Importar fatura</a>
+        {% if pending.has_pending %}
+        <a href="/revisar-fatura/{{ pending.statement_id }}">Revisar conciliação <span class="pending-badge">{{ pending.pending_count }}</span></a>
+        {% else %}
+        <span class="menu-disabled" aria-disabled="true" title="Nenhuma conciliação pendente">Revisar conciliação</span>
+        {% endif %}
+        <a href="/extrato-bancario">Importar extrato bancário</a>
+    </nav>
+</details>

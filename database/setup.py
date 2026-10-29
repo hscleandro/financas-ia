@@ -64,7 +64,8 @@ def setup_database() -> None:
                 status       TEXT      NOT NULL DEFAULT 'pending'
                              CHECK(status IN ('pending', 'confirmed', 'failed')),
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(file_hash, card_last_four)
+                review_warnings TEXT NOT NULL DEFAULT '[]',
+                UNIQUE(user_id, file_hash, card_last_four)
             );
 
             CREATE TABLE IF NOT EXISTS statement_transactions (
@@ -109,6 +110,46 @@ def setup_database() -> None:
                 new_data    TEXT      DEFAULT NULL,
                 user_id     INTEGER   REFERENCES users(id),
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS statement_review_items (
+                statement_id INTEGER NOT NULL REFERENCES card_statements(id),
+                item_id TEXT NOT NULL,
+                tx_id INTEGER UNIQUE REFERENCES statement_transactions(id),
+                expense_id INTEGER REFERENCES expenses(id),
+                claimed_expense_id INTEGER UNIQUE REFERENCES expenses(id),
+                section TEXT NOT NULL CHECK(section IN ('new', 'matched', 'bank')),
+                decision TEXT NOT NULL DEFAULT 'pending'
+                         CHECK(decision IN ('pending', 'approved', 'ignored')),
+                category TEXT,
+                category_edited INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                warning TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                reviewed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(statement_id, item_id),
+                CHECK((section = 'bank' AND tx_id IS NULL AND expense_id IS NOT NULL)
+                      OR (section IN ('new', 'matched') AND tx_id IS NOT NULL)),
+                CHECK(claimed_expense_id IS NULL
+                      OR (tx_id IS NOT NULL AND decision != 'ignored'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_statement_reviews_pending
+            ON statement_review_items(statement_id, decision, active);
+
+            CREATE INDEX IF NOT EXISTS idx_card_statements_user_hash
+            ON card_statements(user_id, file_hash);
+
+            CREATE TABLE IF NOT EXISTS statement_review_batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                statement_id INTEGER NOT NULL REFERENCES card_statements(id),
+                request_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                processed INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, request_id)
             );
 
             CREATE TABLE IF NOT EXISTS income_categories (
