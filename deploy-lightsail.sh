@@ -17,7 +17,20 @@ echo "📥 Atualizando código da branch main..."
 git checkout main
 git pull origin main
 
-# 3. Verificar variáveis de ambiente necessárias
+# 3. Carregar variáveis do .env para o shell atual
+# (docker-compose lê o .env sozinho, mas este script precisa verificar se as variáveis existem)
+if [ -f .env ]; then
+    echo "🔍 Carregando variáveis do .env..."
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+else
+    echo "❌ ERRO: Arquivo .env não encontrado. Crie-o a partir do .env.example."
+    exit 1
+fi
+
+# 4. Verificar variáveis de ambiente necessárias
 echo "🔍 Verificando variáveis de ambiente..."
 REQUIRED_VARS="OPENAI_API_KEY TELEGRAM_BOT_TOKEN WEB_AUTH_PASSWORD WEB_SESSION_SECRET"
 MISSING=0
