@@ -1350,3 +1350,140 @@ def test_separate_legacy_imports_of_a_known_line_do_not_consume_an_unknown_origi
     service.import_statement(tmp_path / "not-read.pdf")
     assert conn.execute("SELECT COUNT(*) FROM statement_transactions").fetchone()[0] == 3
     assert conn.execute("SELECT COUNT(*) FROM expenses").fetchone()[0] == 1
+
+
+def test_approve_installment_generates_future_parcels(test_db):
+    """Aprovar uma parcela deve gerar as parcelas futuras como despesas."""
+    from database.setup import get_connection
+    from database.user_setup import create_or_update_user
+
+    conn = get_connection()
+    user = create_or_update_user(conn, telegram_id=123499, name="TesteParcela")
+    user_id = user["id"]
+
+    service = StatementService(conn, user_id)
+
+    cursor = conn.execute(
+        """
+        INSERT INTO card_statements (user_id, file_hash, file_name, statement_date, due_date, total_cents, card_last_four, card_holder, status)
+        VALUES (?, 'hash-install', 'fatura.pdf', '2026-09-10', '2026-09-10', 15445, '3006', 'LEANDRO', 'pending')
+        """,
+        (user_id,),
+    )
+    statement_id = cursor.lastrowid
+
+    cur = conn.execute(
+        """
+        INSERT INTO statement_transactions (statement_id, card_holder, card_last_four, transaction_date, description, amount_cents, installment_info, installment_current, installment_total, original_purchase_date, raw_line)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (statement_id, "LEANDRO", "3006", "2026-08-01", "PAYPAL *DSA ACADEMY", 15445, "07/11", 7, 11, "2026-03-13", "13/03 PAYPAL *DSA ACADEMY 07/11 SAO PAULO 154,45"),
+    )
+    tx_id = cur.lastrowid
+    conn.commit()
+
+    summary = service.confirm_reconciliation(
+        statement_id,
+        insert_ids=[tx_id],
+        update_pairs=[],
+        delete_ids=[],
+        default_category="Outros",
+    )
+
+    assert summary["inserted"] == 1
+
+    # Deve ter criado 1 despesa atual + 4 futuras (parcelas 8 a 11)
+    expenses = conn.execute(
+        """SELECT expense_date, amount, description FROM expenses
+           WHERE user_id = ? AND deleted_at IS NULL
+           ORDER BY expense_date""",
+        (user_id,),
+    ).fetchall()
+    assert len(expenses) == 5
+    assert [str(row["expense_date"]) for row in expenses] == [
+        "2026-08-01", "2026-09-01", "2026-10-01", "2026-11-01", "2026-12-01"
+    ]
+    for row in expenses:
+        assert row["amount"] == 154.45
+        assert row["description"] == "PAYPAL *DSA ACADEMY"
+
+    # Deve ter criado o grupo e as parcelas no controle de parcelamento
+    group = conn.execute("SELECT * FROM installment_groups WHERE user_id = ?", (user_id,)).fetchone()
+    assert group is not None
+    assert group["total_parcels"] == 11
+    parcels = conn.execute(
+        "SELECT * FROM installment_parcels WHERE group_id = ? ORDER BY parcel_number",
+        (group["id"],),
+    ).fetchall()
+    assert len(parcels) == 5
+    assert parcels[0]["parcel_number"] == 7
+    assert parcels[0]["expense_id"] is not None
+    assert parcels[4]["parcel_number"] == 11
+
+
+def test_future_installment_statement_matches_generated_expense(test_db):
+    """Importar fatura futura deve casar com despesa gerada anteriormente."""
+    from database.setup import get_connection
+    from database.user_setup import create_or_update_user
+
+    conn = get_connection()
+    user = create_or_update_user(conn, telegram_id=123500, name="TesteParcelaFutura")
+    user_id = user["id"]
+
+    service = StatementService(conn, user_id)
+
+    # Fatura atual com parcela 7/11
+    cursor = conn.execute(
+        """
+        INSERT INTO card_statements (user_id, file_hash, file_name, statement_date, due_date, total_cents, card_last_four, card_holder, status)
+        VALUES (?, 'hash-current', 'fatura_atual.pdf', '2026-09-10', '2026-09-10', 15445, '3006', 'LEANDRO', 'pending')
+        """,
+        (user_id,),
+    )
+    current_statement_id = cursor.lastrowid
+
+    cur = conn.execute(
+        """
+        INSERT INTO statement_transactions (statement_id, card_holder, card_last_four, transaction_date, description, amount_cents, installment_info, installment_current, installment_total, original_purchase_date, raw_line)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (current_statement_id, "LEANDRO", "3006", "2026-08-01", "PAYPAL *DSA ACADEMY", 15445, "07/11", 7, 11, "2026-03-13", "13/03 PAYPAL *DSA ACADEMY 07/11 SAO PAULO 154,45"),
+    )
+    current_tx_id = cur.lastrowid
+    conn.commit()
+
+    service.confirm_reconciliation(
+        current_statement_id,
+        insert_ids=[current_tx_id],
+        update_pairs=[],
+        delete_ids=[],
+        default_category="Outros",
+    )
+
+    # Fatura futura com parcela 8/11
+    cursor = conn.execute(
+        """
+        INSERT INTO card_statements (user_id, file_hash, file_name, statement_date, due_date, total_cents, card_last_four, card_holder, status)
+        VALUES (?, 'hash-future', 'fatura_futura.pdf', '2026-10-10', '2026-10-10', 15445, '3006', 'LEANDRO', 'pending')
+        """,
+        (user_id,),
+    )
+    future_statement_id = cursor.lastrowid
+
+    conn.execute(
+        """
+        INSERT INTO statement_transactions (statement_id, card_holder, card_last_four, transaction_date, description, amount_cents, installment_info, installment_current, installment_total, original_purchase_date, raw_line)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (future_statement_id, "LEANDRO", "3006", "2026-09-01", "PAYPAL *DSA ACADEMY", 15445, "08/11", 8, 11, "2026-03-13", "13/03 PAYPAL *DSA ACADEMY 08/11 SAO PAULO 154,45"),
+    )
+    conn.commit()
+
+    result = service.reconcile(future_statement_id)
+    section = result.sections.get("3006")
+    assert section is not None
+    assert len(section.matched) == 1
+    assert len(section.only_on_statement) == 0
+    # A parcela 8/11 deve ter sido casada com a despesa gerada no passo anterior
+    assert section.matched[0].statement_tx.installment_current == 8
+    assert section.matched[0].expense["expense_date"] == "2026-09-01"

@@ -79,6 +79,23 @@ class StatementService:
     def _cents(amount) -> int:
         return int((Decimal(str(amount)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
+    @staticmethod
+    def _installment_reference_date(due_date: date, current: int, parcel: int) -> date:
+        """Primeiro dia do mês de referência de uma parcela.
+
+        O mês de referência da fatura é o mês anterior ao vencimento.
+        A parcela corrente (current) cai nesse mês; parcelas posteriores
+        avançam mês a mês.
+        """
+        if due_date.month == 1:
+            base = date(due_date.year - 1, 12, 1)
+        else:
+            base = date(due_date.year, due_date.month - 1, 1)
+        months = parcel - current
+        year = base.year + (base.month - 1 + months) // 12
+        month = (base.month - 1 + months) % 12 + 1
+        return date(year, month, 1)
+
     def _category(self, category: str) -> Optional[str]:
         if not isinstance(category, str):
             raise ValueError("Categoria inválida: informe uma categoria cadastrada.")
@@ -119,6 +136,9 @@ class StatementService:
             "category": tx["selected_category"] if tx is not None else expense["category"],
             "card_last_four": tx["card_last_four"] if tx is not None else expense["card_last_four"],
             "installment_info": tx["installment_info"] if tx is not None else None,
+            "installment_current": tx["installment_current"] if tx is not None and "installment_current" in tx.keys() else None,
+            "installment_total": tx["installment_total"] if tx is not None and "installment_total" in tx.keys() else None,
+            "original_purchase_date": str(tx["original_purchase_date"]) if tx is not None and "original_purchase_date" in tx.keys() and tx["original_purchase_date"] else None,
             "bank_name": expense["description"] if bank else None,
             "bank_date": str(expense["expense_date"]) if bank else None,
             "bank_amount_cents": StatementService._cents(expense["amount"]) if bank else None,
@@ -224,11 +244,15 @@ class StatementService:
                     """
                     INSERT INTO statement_transactions (
                         statement_id, card_holder, card_last_four, transaction_date,
-                        description, amount_cents, installment_info, raw_line, selected_category
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        description, amount_cents, installment_info, installment_current,
+                        installment_total, original_purchase_date, raw_line, selected_category
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (statement_id, tx.card_holder, tx.card_last_four, tx.transaction_date.isoformat(),
-                     tx.description, tx.amount_cents, tx.installment_info, tx.raw_line, suggested),
+                     tx.description, tx.amount_cents, tx.installment_info, tx.installment_current,
+                     tx.installment_total,
+                     tx.original_purchase_date.isoformat() if tx.original_purchase_date else None,
+                     tx.raw_line, suggested),
                 )
             self._materialize(statement_id)
         return statement_id, statement, cards
@@ -499,6 +523,81 @@ class StatementService:
         new["category"] = category
         log_audit(self.conn, "update", expense_id, dict(old), new, user_id=self.user_id)
 
+    def _generate_installment_parcels(self, tx: dict, expense_id: int, category: str):
+        """Gera parcelas futuras como despesas normais, evitando duplicatas."""
+        current = tx["installment_current"]
+        total = tx["installment_total"]
+        if not current or not total or current > total:
+            return
+        due_row = self.conn.execute(
+            "SELECT due_date FROM card_statements WHERE id = ?", (tx["statement_id"],)
+        ).fetchone()
+        if not due_row or not due_row["due_date"]:
+            return
+        due_date = date.fromisoformat(due_row["due_date"])
+
+        group = self.conn.execute(
+            """SELECT id FROM installment_groups
+               WHERE user_id = ? AND description = ? AND card_last_four = ?
+                 AND total_parcels = ? AND original_purchase_date = ?""",
+            (self.user_id, tx["description"], tx["card_last_four"], total, tx["original_purchase_date"]),
+        ).fetchone()
+        if not group:
+            cursor = self.conn.execute(
+                """INSERT INTO installment_groups
+                   (user_id, description, card_last_four, total_parcels,
+                    original_purchase_date, amount_cents)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (self.user_id, tx["description"], tx["card_last_four"], total,
+                 tx["original_purchase_date"], tx["amount_cents"]),
+            )
+            group_id = cursor.lastrowid
+        else:
+            group_id = group["id"]
+
+        for parcel in range(current, total + 1):
+            reference_date = self._installment_reference_date(due_date, current, parcel)
+            if parcel == current:
+                parcel_expense_id = expense_id
+                statement_tx_id = tx["id"]
+            else:
+                existing = self.conn.execute(
+                    """SELECT id FROM expenses
+                       WHERE user_id = ? AND description = ? AND amount = ?
+                         AND expense_date = ? AND card_last_four = ?
+                         AND method = ? AND deleted_at IS NULL""",
+                    (self.user_id, tx["description"], tx["amount_cents"] / 100,
+                     reference_date.isoformat(), tx["card_last_four"], CREDIT_CARD_METHOD),
+                ).fetchone()
+                if existing:
+                    parcel_expense_id = existing["id"]
+                else:
+                    amount = tx["amount_cents"] / 100
+                    cursor = self.conn.execute(
+                        """INSERT INTO expenses
+                           (user_id, amount, description, category, method, expense_date,
+                            hash, card_last_four, card_holder, statement_id)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (self.user_id, amount, tx["description"], category,
+                         CREDIT_CARD_METHOD, reference_date.isoformat(),
+                         compute_hash(amount, tx["description"], reference_date),
+                         tx["card_last_four"], tx["card_holder"], None),
+                    )
+                    parcel_expense_id = cursor.lastrowid
+                statement_tx_id = None
+
+            self.conn.execute(
+                """INSERT INTO installment_parcels
+                   (group_id, parcel_number, reference_date, expense_id, statement_transaction_id)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(group_id, parcel_number) DO UPDATE SET
+                       reference_date = excluded.reference_date,
+                       expense_id = excluded.expense_id,
+                       statement_transaction_id = COALESCE(excluded.statement_transaction_id,
+                                                              installment_parcels.statement_transaction_id)""",
+                (group_id, parcel, reference_date.isoformat(), parcel_expense_id, statement_tx_id),
+            )
+
     def _review(self, statement_id: int, section: str, action: str, items: list[dict]) -> int:
         processed = 0
         for item in items:
@@ -566,11 +665,15 @@ class StatementService:
                          tx["card_last_four"], tx["card_holder"], statement_id),
                     )
                     expense_id = cursor.lastrowid
+                    if "installment_current" in tx.keys() and tx["installment_current"]:
+                        self._generate_installment_parcels(tx, expense_id, category)
                 elif not edited:
                     category = expense["category"] if section == "matched" else snapshot["bank_category"]
                 if section != "new" and edited and category:
                     category = self._category(category)
                     self._apply_category(expense_id, category)
+                if section == "matched" and action == "approve" and "installment_current" in tx.keys() and tx["installment_current"]:
+                    self._generate_installment_parcels(tx, expense_id, category)
 
             snapshot["expense_id"] = expense_id
             snapshot["category"] = category
@@ -699,6 +802,8 @@ class StatementService:
                 id=row["id"], transaction_date=date.fromisoformat(row["transaction_date"]),
                 description=row["description"], amount_cents=row["amount_cents"], card_holder=row["card_holder"],
                 card_last_four=row["card_last_four"], installment_info=row["installment_info"],
+                installment_current=row["installment_current"], installment_total=row["installment_total"],
+                original_purchase_date=date.fromisoformat(row["original_purchase_date"]) if row["original_purchase_date"] else None,
                 raw_line=row["raw_line"] or "", selected_category=item["category"],
                 ambiguous=bool(item.get("ambiguous")),
             )

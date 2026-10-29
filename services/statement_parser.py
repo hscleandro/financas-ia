@@ -50,6 +50,9 @@ class ParsedTransaction:
     purchase_date: Optional[date] = None
     city: Optional[str] = None
     installment_info: Optional[str] = None
+    installment_current: Optional[int] = None
+    installment_total: Optional[int] = None
+    original_purchase_date: Optional[date] = None
     ambiguous: bool = False
     is_credit: bool = False
     raw_line: str = ""
@@ -93,6 +96,23 @@ def _bradesco_month_year(due_date: date, dd_mm_str: str) -> date:
         else:
             candidate = date(year, month - 1, day)
     return candidate
+
+
+def _is_installment_token(token: str) -> bool:
+    """Verifica se um token no formato DD/DD representa parcela NN/TT."""
+    if not re.fullmatch(r"\d{2}/\d{2}", token):
+        return False
+    current, total = int(token[:2]), int(token[3:])
+    return 1 <= current <= total <= 99
+
+
+def _statement_reference_month(due_date: Optional[date]) -> Optional[date]:
+    """Primeiro dia do mês de referência da fatura (mês anterior ao vencimento)."""
+    if due_date is None:
+        return None
+    if due_date.month == 1:
+        return date(due_date.year - 1, 12, 1)
+    return date(due_date.year, due_date.month - 1, 1)
 
 
 def _parse_amount(value_str: str) -> int:
@@ -268,44 +288,68 @@ def _parse_transaction_line(line: str, due_date: date) -> Optional[ParsedTransac
     purchase_date: Optional[date] = None
     city: Optional[str] = None
     installment_info: Optional[str] = None
+    installment_current: Optional[int] = None
+    installment_total: Optional[int] = None
+
+    # Procura por parcela no meio da descrição, mesmo colada a letras/dígitos
+    # (ex: "ELAZA COMERCIAL VARE05/10 SAO PAULO", "MERCADOLIVRE*INFANTO01/03").
+    # A regex exige que o token NN/TT seja uma parcela válida para evitar
+    # confundir com datas de compra no formato DD/MM.
+    installment_colada_match = None
+    for m in re.finditer(r"(?<![0-9/])(\d{2}/\d{2})(?![0-9/])", middle):
+        if _is_installment_token(m.group(1)):
+            installment_colada_match = m
+            break
 
     # Procura por segunda data no meio (data da compra ou parcela)
     remaining_dates = list(DATE_RE.finditer(middle))
     if remaining_dates:
         second = remaining_dates[-1]  # última data geralmente é a cidade/compra
         second_str = second.group(1)
-        try:
-            second_date = _bradesco_month_year(due_date, second_str)
-        except ValueError:
-            second_date = None
 
         before_second = middle[: second.start()].strip()
         after_second = middle[second.end():].strip()
 
-        # Heurística para parcela: se a segunda data for anterior à data do
-        # lançamento em mais de 30 dias, provavelmente indica parcela atual/total
-        # (ex: 01/03, 02/05), não a data da compra.
-        is_installment = (
-            second_date is not None
-            and (transaction_date - second_date).days > 30
-        )
-
-        if is_installment:
+        # Formato NN/TT indica parcela (ex: 07/11 -> parcela 7 de 11).
+        if _is_installment_token(second_str):
             installment_info = second_str
+            installment_current = int(second_str[:2])
+            installment_total = int(second_str[3:])
             description = before_second
             city = after_second
-        elif second_date:
-            purchase_date = second_date
-            description = before_second
-            city = after_second
+        else:
+            try:
+                second_date = _bradesco_month_year(due_date, second_str)
+            except ValueError:
+                second_date = None
+
+            if second_date:
+                purchase_date = second_date
+                description = before_second
+                city = after_second
+
+    # Se não achou parcela separada, tenta a colada (ex: VARE05/10).
+    if installment_info is None and installment_colada_match is not None:
+        second = installment_colada_match
+        second_str = second.group(1)
+        before_second = middle[: second.start()].strip()
+        after_second = middle[second.end():].strip()
+        installment_info = second_str
+        installment_current = int(second_str[:2])
+        installment_total = int(second_str[3:])
+        description = before_second
+        city = after_second
 
     # Detecta parcelamento colado ao final da descrição sem separação de espaço
     # (ex: "MERCADOLIVRE*INFANTO01/03").
     inst_match = re.search(r"(\d{2}/\d{2})$", description.replace(" ", ""))
     if inst_match:
+        inst_str = inst_match.group(1)
         # Só considera parcela se não tiver sido detectada acima
-        if installment_info is None:
-            installment_info = inst_match.group(1)
+        if installment_info is None and _is_installment_token(inst_str):
+            installment_info = inst_str
+            installment_current = int(inst_str[:2])
+            installment_total = int(inst_str[3:])
         description = description[: -len(inst_match.group(1))].strip()
 
     # Normaliza descrição
@@ -326,6 +370,12 @@ def _parse_transaction_line(line: str, due_date: date) -> Optional[ParsedTransac
         for k in ["PAGTO.", "PAGAMENTO", "CREDITO", "CRÉDITO", "ESTORNO", "DEB EM C/C"]
     )
 
+    # Preserva a data original da compra e, para parcelas, usa o primeiro dia
+    # do mês de referência da fatura como data contábil.
+    original_purchase_date = transaction_date
+    if installment_current is not None and due_date is not None:
+        transaction_date = _statement_reference_month(due_date)
+
     return ParsedTransaction(
         transaction_date=transaction_date,
         description=description,
@@ -333,6 +383,9 @@ def _parse_transaction_line(line: str, due_date: date) -> Optional[ParsedTransac
         purchase_date=purchase_date,
         city=city,
         installment_info=installment_info,
+        installment_current=installment_current,
+        installment_total=installment_total,
+        original_purchase_date=original_purchase_date,
         is_credit=is_credit,
         raw_line=line,
     )

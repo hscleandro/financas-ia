@@ -77,6 +77,9 @@ def setup_database() -> None:
                 description       TEXT      NOT NULL,
                 amount_cents      INTEGER   NOT NULL,
                 installment_info  TEXT,
+                installment_current INTEGER,
+                installment_total INTEGER,
+                original_purchase_date DATE,
                 raw_line          TEXT,
                 matched_expense_id INTEGER,
                 selected_category TEXT,
@@ -151,6 +154,37 @@ def setup_database() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, request_id)
             );
+
+            CREATE TABLE IF NOT EXISTS installment_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                description TEXT NOT NULL,
+                card_last_four TEXT,
+                total_parcels INTEGER NOT NULL,
+                original_purchase_date DATE,
+                amount_cents INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS installment_parcels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER NOT NULL REFERENCES installment_groups(id),
+                parcel_number INTEGER NOT NULL,
+                reference_date DATE NOT NULL,
+                expense_id INTEGER REFERENCES expenses(id),
+                statement_transaction_id INTEGER REFERENCES statement_transactions(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(group_id, parcel_number)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_installment_parcels_group
+            ON installment_parcels(group_id);
+
+            CREATE INDEX IF NOT EXISTS idx_installment_parcels_expense
+            ON installment_parcels(expense_id);
+
+            CREATE INDEX IF NOT EXISTS idx_installment_groups_user
+            ON installment_groups(user_id);
 
             CREATE TABLE IF NOT EXISTS income_categories (
                 id          INTEGER   PRIMARY KEY AUTOINCREMENT,

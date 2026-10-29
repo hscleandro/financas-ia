@@ -1,10 +1,12 @@
-const CACHE_NAME = "financas-ia-v1";
+const CACHE_NAME = "financas-ia-v2";
 const STATIC_ASSETS = [
     "/",
     "/login",
     "/static/manifest.json",
     "/static/icons/icon-192x192.png",
     "/static/icons/icon-512x512.png",
+    "/static/icons/icon-maskable-192x192.png",
+    "/static/icons/icon-maskable-512x512.png",
     "/static/account-menu.css",
     "/static/account-menu.js",
     "/static/dashboard.css",

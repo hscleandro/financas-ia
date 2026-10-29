@@ -47,23 +47,40 @@ def test_parse_transaction_line_basic():
 
 def test_parse_transaction_line_with_purchase_date():
     due = date(2026, 10, 10)
-    tx = _parse_transaction_line("13/03 PAYPAL *DSA ACADEMY 07/11 SAO PAULO 154,45", due)
+    # 15/04 não é parcela (15 > 4), portanto é tratado como data da compra
+    tx = _parse_transaction_line("13/03 LOJA X 15/04 SAO PAULO 100,00", due)
     assert tx is not None
     assert tx.transaction_date == date(2026, 3, 13)
-    # Formato Bradesco é DD/MM, portanto 07/11 = 7 de novembro
-    assert tx.purchase_date == date(2026, 11, 7)
+    assert tx.purchase_date == date(2026, 4, 15)
     assert tx.city == "SAO PAULO"
-    assert tx.amount_cents == 15445
+    assert tx.amount_cents == 10000
 
 
 def test_parse_transaction_line_installment():
     due = date(2026, 10, 10)
     tx = _parse_transaction_line("30/08 GOL LINHAS A*NDNO 01/03 SAO PAULO 459,28", due)
     assert tx is not None
-    assert tx.transaction_date == date(2026, 8, 30)
-    # 01/03 está a mais de 30 dias antes do lançamento -> parcela
+    # A data contábil é o primeiro dia do mês de referência da fatura
+    assert tx.transaction_date == date(2026, 9, 1)
+    assert tx.original_purchase_date == date(2026, 8, 30)
     assert tx.installment_info == "01/03"
+    assert tx.installment_current == 1
+    assert tx.installment_total == 3
     assert tx.amount_cents == 45928
+
+
+def test_parse_transaction_line_installment_dsa_academy():
+    # Exemplo do documento de requisitos: vencimento em setembro -> mês
+    # de referência agosto; parcela 07/11 registrada em 01/08/2026.
+    due = date(2026, 9, 10)
+    tx = _parse_transaction_line("13/03 PAYPAL *DSA ACADEMY 07/11 SAO PAULO 154,45", due)
+    assert tx is not None
+    assert tx.transaction_date == date(2026, 8, 1)
+    assert tx.original_purchase_date == date(2026, 3, 13)
+    assert tx.installment_info == "07/11"
+    assert tx.installment_current == 7
+    assert tx.installment_total == 11
+    assert tx.city == "SAO PAULO"
 
 
 def test_parse_transaction_line_credit_payment():
