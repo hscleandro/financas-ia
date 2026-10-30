@@ -192,8 +192,8 @@ def test_dashboard_serializes_full_contract_and_renders_real_metrics(
     )
     assert set(data) == {
         "period", "period_label", "period_options", "evolution_category", "categories",
-        "total_cents", "expense_count", "comparison", "evolution", "category_parts",
-        "payment_methods", "expenses",
+        "evolution_method", "payment_method_options", "total_cents", "expense_count",
+        "comparison", "evolution", "category_parts", "payment_methods", "expenses",
     }
     assert data["period"] == "2026-10"
     assert (data["total_cents"], data["expense_count"]) == (131346, 2)
@@ -259,28 +259,33 @@ def test_comparison_presentation(
 
 
 @pytest.mark.parametrize("period", ["2024-02", "2022-06"], ids=["historical", "empty-selected-month"])
-def test_month_options_and_get_forms_preserve_both_selections(logged_client, add_expense, period):
-    add_expense(10, "2024-02-29", category="Transporte")
+def test_month_options_and_get_forms_preserve_all_selections(logged_client, add_expense, period):
+    add_expense(10, "2024-02-29", category="Transporte", method="crédito")
     page, data = _dashboard(logged_client.get(
-        "/", params={"period": period, "evolution_category": "Transporte"},
+        "/", params={"period": period, "evolution_category": "Transporte", "evolution_method": "crédito"},
     ))
     period_form = page.one("form", class_="period-form")
     category_form = page.one("form", class_="category-form")
+    method_form = page.one("form", class_="method-form")
     period_select = page.one("select", id="period", within=period_form)
     category_select = page.one("select", id="evolution-category", within=category_form)
+    method_select = page.one("select", id="evolution-method", within=method_form)
     assert period_select.attrs["name"] == "period"
     assert category_select.attrs["name"] == "evolution_category"
-    assert len(page.find("select")) == 2
-    for form in (period_form, category_form):
+    assert method_select.attrs["name"] == "evolution_method"
+    assert len(page.find("select")) == 3
+    for form in (period_form, category_form, method_form):
         assert form.attrs["method"].lower() == "get"
         assert urlsplit(form.attrs["action"]).path == "/"
         assert "data-auto-submit" in form.attrs
         fallback = page.one("noscript", within=form)
         assert page.one("button", within=fallback).attrs["type"] == "submit"
     assert urlsplit(category_form.attrs["action"]).fragment == "evolucao-mensal"
+    assert urlsplit(method_form.attrs["action"]).fragment == "evolucao-mensal"
     for form, expected in (
-        (period_form, {"evolution_category": "Transporte"}),
-        (category_form, {"period": period}),
+        (period_form, {"evolution_category": "Transporte", "evolution_method": "crédito"}),
+        (category_form, {"period": period, "evolution_method": "crédito"}),
+        (method_form, {"period": period, "evolution_category": "Transporte"}),
     ):
         assert {
             control.attrs["name"]: control.attrs["value"]
@@ -303,8 +308,14 @@ def test_month_options_and_get_forms_preserve_both_selections(logged_client, add
     assert [
         option.attrs["value"] for option in category_options if "selected" in option.attrs
     ] == ["Transporte"]
+    method_options = page.find("option", within=method_select)
+    assert [option.attrs["value"] for option in method_options] == ["", *data["payment_method_options"]]
+    assert [
+        option.attrs["value"] for option in method_options if "selected" in option.attrs
+    ] == ["crédito"]
     assert data["period"] == period
     assert data["evolution_category"] == "Transporte"
+    assert data["evolution_method"] == "crédito"
 
 
 def test_category_selection_only_changes_evolution_and_can_be_cleared(logged_client, add_expense):
@@ -555,8 +566,11 @@ def test_bootstrap_and_html_escape_original_descriptions_and_selected_category(
         {"period": "2026-11"},
         {"period": "2026-09", "evolution_category": "Inexistente"},
         {"evolution_category": "Segredo"},
+        {"period": "2026-09", "evolution_method": "Inexistente"},
+        {"evolution_method": "Segredo"},
     ],
-    ids=["malformed-period", "future-period", "unknown-category", "foreign-category"],
+    ids=["malformed-period", "future-period", "unknown-category", "foreign-category",
+         "unknown-method", "foreign-method"],
 )
 def test_invalid_filters_return_400_without_database_changes(
     logged_client, expense_service, category_catalog, pending_statement, params,

@@ -120,12 +120,13 @@ def dashboard(
     request: Request,
     period: str | None = None,
     evolution_category: str | None = None,
+    evolution_method: str | None = None,
     service: ExpenseService = Depends(_get_expense_service),
     statement_service: StatementService = Depends(_get_statement_service),
     user: dict = Depends(get_current_user),
 ):
     try:
-        data = build_dashboard_data(service, period, evolution_category)
+        data = build_dashboard_data(service, period, evolution_category, evolution_method)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     pending = statement_service.get_pending_summary()

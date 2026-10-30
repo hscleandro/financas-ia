@@ -39,10 +39,11 @@ h2 { margin: 0 0 16px; font-size: 16px; }
 .dashboard-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 20px 12px; align-items: stretch; }
 .card-heading { margin-bottom: 16px; }
 .card-heading h2 { margin-bottom: 0; }
-.category-form { min-width: 0; max-width: 49%; }
-.category-form select { width: 100%; padding: 5px 3px; border-color: transparent; border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
-.category-form select:hover, .category-form select:focus { border-color: var(--edge); background: #1c2836; }
-.category-form option { background: #1c2836; color: var(--txt); }
+.evolution-filters { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 70%; }
+.category-form, .method-form { min-width: 0; flex: 1 1 auto; }
+.category-form select, .method-form select { width: 100%; padding: 5px 3px; border-color: transparent; border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
+.category-form select:hover, .category-form select:focus, .method-form select:hover, .method-form select:focus { border-color: var(--edge); background: #1c2836; }
+.category-form option, .method-form option { background: #1c2836; color: var(--txt); }
 .chart-caption { font-size: 13px; }
 .bars { height: 190px; display: flex; align-items: end; justify-content: space-around; gap: 10px; padding-top: 20px; margin-bottom: 27px; }
 .bar-column { height: 100%; flex: 1; max-width: 44px; display: flex; align-items: end; position: relative; }
@@ -86,6 +87,8 @@ h2 { margin: 0 0 16px; font-size: 16px; }
     .card { padding: 16px; }
     .period-form select { padding: 9px 8px; font-size: 12px; }
     .subtitle { font-size: 12px; line-height: 1.4; }
+    .evolution-filters { max-width: 100%; width: 100%; margin-top: 12px; }
+    .card-heading { flex-wrap: wrap; }
 }
 
 @media (max-width: 360px) {

@@ -28,6 +28,7 @@ R$ {{ "{:,.2f}".format(cents / 100).replace(',', '_').replace('.', ',').replace(
     </div>
     <form action="/" method="get" class="period-form" data-auto-submit>
         {% if dashboard_data.evolution_category %}<input type="hidden" name="evolution_category" value="{{ dashboard_data.evolution_category }}">{% endif %}
+        {% if dashboard_data.evolution_method %}<input type="hidden" name="evolution_method" value="{{ dashboard_data.evolution_method }}">{% endif %}
         <select aria-label="Período" name="period" id="period">
             {% for option in dashboard_data.period_options %}
             <option value="{{ option.value }}"{% if option.value == dashboard_data.period %} selected{% endif %}>{{ option.label }}</option>
@@ -62,16 +63,30 @@ R$ {{ "{:,.2f}".format(cents / 100).replace(',', '_').replace('.', ',').replace(
     <section class="card evolution-card" id="evolucao-mensal" aria-labelledby="evolution-title">
         <div class="card-heading">
             <h2 id="evolution-title">Evolução mensal</h2>
-            <form action="/#evolucao-mensal" method="get" class="category-form" data-auto-submit>
-                <input type="hidden" name="period" value="{{ dashboard_data.period }}">
-                <select name="evolution_category" id="evolution-category" aria-label="Categoria da evolução mensal">
-                    <option value="">Todas as categorias</option>
-                    {% for category in dashboard_data.categories %}
-                    <option value="{{ category }}"{% if category == dashboard_data.evolution_category %} selected{% endif %}>{{ category }}</option>
-                    {% endfor %}
-                </select>
-                <noscript><button type="submit">Filtrar gráfico</button></noscript>
-            </form>
+            <div class="evolution-filters">
+                <form action="/#evolucao-mensal" method="get" class="category-form" data-auto-submit>
+                    <input type="hidden" name="period" value="{{ dashboard_data.period }}">
+                    {% if dashboard_data.evolution_method %}<input type="hidden" name="evolution_method" value="{{ dashboard_data.evolution_method }}">{% endif %}
+                    <select name="evolution_category" id="evolution-category" aria-label="Categoria da evolução mensal">
+                        <option value="">Todas as categorias</option>
+                        {% for category in dashboard_data.categories %}
+                        <option value="{{ category }}"{% if category == dashboard_data.evolution_category %} selected{% endif %}>{{ category }}</option>
+                        {% endfor %}
+                    </select>
+                    <noscript><button type="submit">Filtrar gráfico</button></noscript>
+                </form>
+                <form action="/#evolucao-mensal" method="get" class="method-form" data-auto-submit>
+                    <input type="hidden" name="period" value="{{ dashboard_data.period }}">
+                    {% if dashboard_data.evolution_category %}<input type="hidden" name="evolution_category" value="{{ dashboard_data.evolution_category }}">{% endif %}
+                    <select name="evolution_method" id="evolution-method" aria-label="Método de pagamento da evolução mensal">
+                        <option value="">Todos os métodos de pagamento</option>
+                        {% for method in dashboard_data.payment_method_options %}
+                        <option value="{{ method }}"{% if method == dashboard_data.evolution_method %} selected{% endif %}>{{ method[:1]|upper + method[1:] }}</option>
+                        {% endfor %}
+                    </select>
+                    <noscript><button type="submit">Filtrar gráfico</button></noscript>
+                </form>
+            </div>
         </div>
         <div class="muted chart-caption">Despesas dos últimos 6 meses</div>
         <div class="bars" aria-label="Despesas por mês">

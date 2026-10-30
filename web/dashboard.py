@@ -37,6 +37,7 @@ def build_dashboard_data(
     service: ExpenseService,
     period: str | None = None,
     evolution_category: str | None = None,
+    evolution_method: str | None = None,
     today: date | None = None,
 ) -> dict:
     """Monta o mes selecionado; a categoria filtra somente a evolucao."""
@@ -65,9 +66,13 @@ def build_dashboard_data(
     ).isoformat()
 
     categories = service.list_categories()
+    payment_methods = service.list_payment_methods()
     evolution_category = evolution_category or ""
     if evolution_category and evolution_category not in categories:
-        raise ValueError("Categoria de evolu\u00e7\u00e3o inv\u00e1lida.")
+        raise ValueError("Categoria de evolução inválida.")
+    evolution_method = evolution_method or ""
+    if evolution_method and evolution_method not in payment_methods:
+        raise ValueError("Método de pagamento inválido.")
 
     summary = service.get_summary(start_date, end_date, group_by="category")
     methods_summary = service.get_summary(start_date, end_date, group_by="method")
@@ -137,6 +142,7 @@ def build_dashboard_data(
         start_date=evolution_months[0].isoformat(),
         end_date=evolution_end_date,
         category=evolution_category or None,
+        method=evolution_method or None,
     ):
         expense_month = row["expense_date"][:7]
         expense_day = date.fromisoformat(row["expense_date"])
@@ -175,6 +181,7 @@ def build_dashboard_data(
             "color": _CATEGORY_COLORS[index % len(_CATEGORY_COLORS)],
         })
 
+    payment_method_options = payment_methods
     payment_methods = []
     for item in methods_summary["items"]:
         cents = _to_cents(item["total"])
@@ -210,6 +217,8 @@ def build_dashboard_data(
         "period_options": period_options,
         "evolution_category": evolution_category,
         "categories": categories,
+        "evolution_method": evolution_method,
+        "payment_method_options": payment_method_options,
         "total_cents": total_cents,
         "expense_count": sum(item["count"] for item in summary["items"]),
         "comparison": {

@@ -82,8 +82,8 @@ def test_dashboard_contract_and_current_calendar_totals(service, add_expense):
 
     assert set(data) == {
         "period", "period_label", "period_options", "evolution_category", "categories",
-        "total_cents", "expense_count", "comparison", "evolution", "category_parts",
-        "payment_methods", "expenses",
+        "evolution_method", "payment_method_options", "total_cents", "expense_count",
+        "comparison", "evolution", "category_parts", "payment_methods", "expenses",
     }
     assert data["period"] == "2026-10"
     assert data["period_label"] == "Outubro 2026"
@@ -178,6 +178,70 @@ def test_historical_month_is_complete_and_compares_previous_calendar_month(servi
         "period": "2026-10", "label": "Out", "full_label": "Outubro 2026",
         "total_cents": 99900, "height_percent": 100, "kind": "current",
     }
+
+
+def test_method_filters_only_evolution(service, add_expense):
+    add_expense(20, "2026-09-01", category="Lazer", method="pix")
+    add_expense(30, "2026-09-30", category="Lazer", method="crédito")
+    add_expense(10, "2026-10-01", category="Transporte", method="pix")
+    add_expense(90, "2026-10-27", category="Transporte", method="crédito")
+
+    baseline = build_dashboard_data(service, today=TODAY)
+    filtered = build_dashboard_data(service, evolution_method="pix", today=TODAY)
+
+    assert filtered["evolution_method"] == "pix"
+    assert [item["total_cents"] for item in baseline["evolution"]] == [0, 0, 0, 0, 5000, 10000]
+    assert [item["total_cents"] for item in filtered["evolution"]] == [0, 0, 0, 0, 2000, 1000]
+    assert [item["height_percent"] for item in filtered["evolution"]] == [0, 0, 0, 0, 100, 50]
+    assert {
+        key: value for key, value in filtered.items()
+        if key not in {"evolution", "evolution_method"}
+    } == {
+        key: value for key, value in baseline.items()
+        if key not in {"evolution", "evolution_method"}
+    }
+    assert build_dashboard_data(service, evolution_method="", today=TODAY) == baseline
+
+
+def test_category_and_method_filters_combine(service, add_expense):
+    add_expense(20, "2026-09-01", category="Lazer", method="pix")
+    add_expense(30, "2026-09-30", category="Lazer", method="crédito")
+    add_expense(10, "2026-10-01", category="Transporte", method="pix")
+    add_expense(90, "2026-10-27", category="Transporte", method="crédito")
+
+    category_only = build_dashboard_data(service, evolution_category="Lazer", today=TODAY)
+    method_only = build_dashboard_data(service, evolution_method="pix", today=TODAY)
+    combined = build_dashboard_data(
+        service, evolution_category="Lazer", evolution_method="pix", today=TODAY,
+    )
+
+    assert combined["evolution_category"] == "Lazer"
+    assert combined["evolution_method"] == "pix"
+    assert [item["total_cents"] for item in category_only["evolution"]] == [0, 0, 0, 0, 5000, 0]
+    assert [item["total_cents"] for item in method_only["evolution"]] == [0, 0, 0, 0, 2000, 1000]
+    assert [item["total_cents"] for item in combined["evolution"]] == [0, 0, 0, 0, 2000, 0]
+
+
+def test_global_and_user_payment_method_catalog(service, test_user, other_user, add_expense):
+    service.conn.executemany(
+        "INSERT INTO payment_methods (name, is_system, user_id) VALUES (?, 0, ?)",
+        [("Global Método", None), ("Meu Método", test_user["id"]), ("Segredo", other_user)],
+    )
+    service.conn.commit()
+    add_expense(10, "2026-10-01", method="Global Método")
+    add_expense(20, "2026-10-02", method="Meu Método")
+
+    for method, total in [("Global Método", 1000), ("Meu Método", 2000), ("pix", 0)]:
+        data = build_dashboard_data(service, evolution_method=method, today=TODAY)
+        assert data["evolution_method"] == method
+        assert data["evolution"][-1]["total_cents"] == total
+        assert {"Global Método", "Meu Método", "pix"} <= set(data["payment_method_options"])
+        assert "Segredo" not in data["payment_method_options"]
+        assert data["payment_method_options"] == sorted(set(data["payment_method_options"]))
+
+    for method in ("Segredo", "Inexistente", " "):
+        with pytest.raises(ValueError, match="Método.*inválido"):
+            build_dashboard_data(service, evolution_method=method, today=TODAY)
 
 
 def test_category_filters_only_evolution(service, add_expense):
