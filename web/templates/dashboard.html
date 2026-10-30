@@ -77,7 +77,7 @@ R$ {{ "{:,.2f}".format(cents / 100).replace(',', '_').replace('.', ',').replace(
         <div class="bars" aria-label="Despesas por mês">
             {% for month in dashboard_data.evolution %}
             <div class="bar-column">
-                <button type="button" class="bar{% if not month.total_cents %} zero{% endif %}" style="height: {{ month.height_percent }}%" data-month="{{ month.full_label }}" data-total="{{ month.total_cents }}" aria-label="{{ month.full_label }}: {{ money(month.total_cents) }}" aria-describedby="evolution-value"></button>
+                <button type="button" class="bar{% if not month.total_cents %} zero{% endif %}{% if month.kind == 'future' %} future{% endif %}" style="height: {{ month.height_percent }}%" data-month="{{ month.full_label }}" data-total="{{ month.total_cents }}" aria-label="{{ month.full_label }}: {{ money(month.total_cents) }}" aria-describedby="evolution-value"></button>
                 <span class="bar-label">{{ month.label }}</span>
             </div>
             {% endfor %}

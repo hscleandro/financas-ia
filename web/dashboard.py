@@ -50,14 +50,18 @@ def build_dashboard_data(
         selected = date(int(period[:4]), int(period[5:]), 1)
     except ValueError:
         raise ValueError("Per\u00edodo inv\u00e1lido. Use YYYY-MM com um m\u00eas v\u00e1lido.") from None
-    if selected > today:
-        raise ValueError("O per\u00edodo n\u00e3o pode ser futuro.")
 
-    evolution_months = [_month_start(selected, offset) for offset in range(-5, 1)]
     start_date = selected.isoformat()
-    end_date = min(
-        today,
-        date(selected.year, selected.month, monthrange(selected.year, selected.month)[1]),
+    current_month_start = date(today.year, today.month, 1)
+    end_of_month = date(
+        selected.year,
+        selected.month,
+        monthrange(selected.year, selected.month)[1],
+    )
+    # Para o mês corrente e meses passados, limita ao dia de hoje;
+    # para meses futuros, usa o último dia do mês selecionado.
+    end_date = (
+        min(today, end_of_month) if selected <= current_month_start else end_of_month
     ).isoformat()
 
     categories = service.list_categories()
@@ -67,10 +71,44 @@ def build_dashboard_data(
 
     summary = service.get_summary(start_date, end_date, group_by="category")
     methods_summary = service.get_summary(start_date, end_date, group_by="method")
-    history = service.get_summary("0001-01-01", today.isoformat(), group_by="month")
+    history = service.get_summary("0001-01-01", "9999-12-31", group_by="month")
     history_totals = {
         item["dimension"]: _to_cents(item["total"]) for item in history["items"]
     }
+
+    # Permite selecionar até o último mês com lançamentos registrados.
+    latest_with_data = max(history_totals.keys()) if history_totals else today.isoformat()[:7]
+    max_allowed = max(today.isoformat()[:7], latest_with_data)
+    if selected.isoformat()[:7] > max_allowed:
+        raise ValueError("O per\u00edodo n\u00e3o pode ser al\u00e9m do \u00faltimo m\u00eas com lan\u00e7amentos.")
+
+    # O gráfico de evolução estica até 2 meses futuros consecutivos com lançamentos.
+    future_months_count = 0
+    for offset in range(1, 3):
+        try:
+            future_month = _month_start(selected, offset)
+        except ValueError:
+            break
+        future_period = future_month.isoformat()[:7]
+        if history_totals.get(future_period, 0) > 0:
+            future_months_count += 1
+        else:
+            break
+    evolution_months = [
+        _month_start(selected, offset)
+        for offset in range(-5 + future_months_count, 1 + future_months_count)
+    ]
+    evolution_end_of_month = date(
+        evolution_months[-1].year,
+        evolution_months[-1].month,
+        monthrange(evolution_months[-1].year, evolution_months[-1].month)[1],
+    )
+    evolution_end_date = (
+        min(today, evolution_end_of_month)
+        if evolution_months[-1] <= current_month_start
+        else evolution_end_of_month
+    ).isoformat()
+
     total_cents = _to_cents(summary["total_geral"])
     previous_period = _month_start(selected, -1).isoformat()[:7]
     previous_total_cents = history_totals.get(previous_period, 0)
@@ -97,21 +135,34 @@ def build_dashboard_data(
     evolution_totals = {month.isoformat()[:7]: 0 for month in evolution_months}
     for row in service.query_expenses(
         start_date=evolution_months[0].isoformat(),
-        end_date=end_date,
+        end_date=evolution_end_date,
         category=evolution_category or None,
     ):
-        evolution_totals[row["expense_date"][:7]] += _to_cents(row["amount"])
+        expense_month = row["expense_date"][:7]
+        expense_day = date.fromisoformat(row["expense_date"])
+        # Meses passados/atuais só contam até hoje; meses futuros contam integralmente.
+        month_start = date(expense_day.year, expense_day.month, 1)
+        if month_start <= current_month_start and expense_day > today:
+            continue
+        evolution_totals[expense_month] += _to_cents(row["amount"])
     maximum = max(evolution_totals.values())
     evolution = []
     for month in evolution_months:
         month_period = month.isoformat()[:7]
         month_total = evolution_totals[month_period]
+        if month > current_month_start:
+            kind = "future"
+        elif month == current_month_start:
+            kind = "current"
+        else:
+            kind = "past"
         evolution.append({
             "period": month_period,
             "label": _MONTH_NAMES[month.month - 1][:3],
             "full_label": _period_label(month),
             "total_cents": month_total,
             "height_percent": month_total / maximum * 100 if maximum else 0,
+            "kind": kind,
         })
 
     category_parts = []

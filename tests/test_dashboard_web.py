@@ -420,6 +420,25 @@ def test_recent_expenses_keep_all_original_rows_for_progressive_enhancement(
         page.one(class_="empty-state", within=recent)
 
 
+def test_future_months_render_with_amber_class(logged_client, add_expense):
+    add_expense(100, "2026-11-15")
+    add_expense(200, "2026-12-20")
+    page, data = _dashboard(logged_client.get("/", params={"period": "2026-12"}))
+
+    chart = page.one("section", id="evolucao-mensal")
+    bars = page.find("button", class_="bar", within=chart)
+    assert len(bars) == 6
+    assert [month["period"] for month in data["evolution"]] == [
+        "2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12",
+    ]
+    for bar, month in zip(bars, data["evolution"]):
+        classes = bar.attrs["class"].split()
+        if month["kind"] == "future":
+            assert "future" in classes
+        else:
+            assert "future" not in classes
+
+
 def test_account_actions_only_appear_inside_the_header_menu(logged_client):
     page, _ = _dashboard(logged_client.get("/"))
     header = page.one("header")

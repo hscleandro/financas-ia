@@ -117,9 +117,13 @@ def test_dashboard_contract_and_current_calendar_totals(service, add_expense):
             "date_label": "1 out", "category": "Lazer", "method": "Pix", "amount_cents": 1010,
         },
     ]
-    assert data["evolution"][-1] == {
+    assert data["evolution"][-2] == {
         "period": "2026-10", "label": "Out", "full_label": "Outubro 2026",
-        "total_cents": 10000, "height_percent": 100,
+        "total_cents": 10000, "height_percent": pytest.approx(10000 / 99900 * 100), "kind": "current",
+    }
+    assert data["evolution"][-1] == {
+        "period": "2026-11", "label": "Nov", "full_label": "Novembro 2026",
+        "total_cents": 99900, "height_percent": 100, "kind": "future",
     }
     assert json.loads(json.dumps(data, ensure_ascii=False, allow_nan=False)) == data
 
@@ -166,7 +170,14 @@ def test_historical_month_is_complete_and_compares_previous_calendar_month(servi
     assert data["comparison"] == {
         "percent": -50, "direction": "down", "previous_total_cents": 10000,
     }
-    assert data["evolution"][-1]["total_cents"] == 5000
+    assert data["evolution"][-2] == {
+        "period": "2026-09", "label": "Set", "full_label": "Setembro 2026",
+        "total_cents": 5000, "height_percent": pytest.approx(5000 / 99900 * 100), "kind": "past",
+    }
+    assert data["evolution"][-1] == {
+        "period": "2026-10", "label": "Out", "full_label": "Outubro 2026",
+        "total_cents": 99900, "height_percent": 100, "kind": "current",
+    }
 
 
 def test_category_filters_only_evolution(service, add_expense):
@@ -229,15 +240,12 @@ def test_six_month_evolution_is_chronological_zero_filled_and_crosses_year(servi
     data = build_dashboard_data(service, period="2026-01", today=TODAY)
 
     assert [item["period"] for item in data["evolution"]] == [
-        "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01",
+        "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02",
     ]
-    assert [item["label"] for item in data["evolution"]] == ["Ago", "Set", "Out", "Nov", "Dez", "Jan"]
-    assert [item["full_label"] for item in data["evolution"]] == [
-        "Agosto 2025", "Setembro 2025", "Outubro 2025", "Novembro 2025", "Dezembro 2025", "Janeiro 2026",
-    ]
-    assert [item["total_cents"] for item in data["evolution"]] == [10, 0, 20, 0, 30, 10]
+    assert [item["label"] for item in data["evolution"]] == ["Set", "Out", "Nov", "Dez", "Jan", "Fev"]
+    assert [item["total_cents"] for item in data["evolution"]] == [0, 20, 0, 30, 10, 99900]
     assert [item["height_percent"] for item in data["evolution"]] == pytest.approx(
-        [100 / 3, 0, 200 / 3, 0, 100, 100 / 3],
+        [0, 20 / 99900 * 100, 0, 30 / 99900 * 100, 10 / 99900 * 100, 100],
     )
     assert data["comparison"]["previous_total_cents"] == 30
 
@@ -360,7 +368,7 @@ def test_period_options_include_recent_historical_and_selected_months_independen
     data = build_dashboard_data(
         service, period="2022-06", evolution_category="Lazer", today=TODAY,
     )
-    expected_values = [f"2026-{month:02d}" for month in range(10, 0, -1)] + [
+    expected_values = ["2026-11"] + [f"2026-{month:02d}" for month in range(10, 0, -1)] + [
         "2025-12", "2025-11", "2024-02", "2023-12", "2022-06",
     ]
 
@@ -410,10 +418,40 @@ def test_invalid_periods_raise_portuguese_value_error(service, period):
         build_dashboard_data(service, period=period, today=TODAY)
 
 
-@pytest.mark.parametrize("period", ["2026-11", "2027-01", "9999-12"])
-def test_future_months_are_rejected(service, period):
-    with pytest.raises(ValueError, match="per\u00edodo.*futuro"):
+@pytest.mark.parametrize("period", ["2027-01", "9999-12"])
+def test_future_months_beyond_latest_with_data_are_rejected(service, period):
+    with pytest.raises(ValueError, match="\u00faltimo m\u00eas com lan\u00e7amentos"):
         build_dashboard_data(service, period=period, today=TODAY)
+
+
+def test_future_months_up_to_latest_with_data_are_allowed(service, add_expense):
+    add_expense(100, "2026-11-15")
+    add_expense(200, "2026-12-20")
+
+    data = build_dashboard_data(service, period="2026-12", today=TODAY)
+
+    assert data["period"] == "2026-12"
+    assert data["total_cents"] == 20000
+    assert data["expense_count"] == 1
+    assert data["evolution"][-1]["total_cents"] == 20000
+    assert data["evolution"][-1]["kind"] == "future"
+
+
+def test_evolution_marks_future_months_and_keeps_six_bars(service, add_expense):
+    add_expense(100, "2026-11-01")
+    add_expense(200, "2026-12-01")
+
+    data = build_dashboard_data(service, period="2026-12", today=TODAY)
+
+    assert len(data["evolution"]) == 6
+    assert [month["period"] for month in data["evolution"]] == [
+        "2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12",
+    ]
+    assert [month["kind"] for month in data["evolution"]] == [
+        "past", "past", "past", "current", "future", "future",
+    ]
+    assert data["evolution"][-2]["total_cents"] == 10000
+    assert data["evolution"][-1]["total_cents"] == 20000
 
 
 def test_current_month_is_valid_before_its_last_day(service, add_expense):
@@ -460,11 +498,15 @@ def test_calendar_boundaries_and_leap_years(
         "percent": 100, "direction": "up", "previous_total_cents": 5000,
     }
     assert len(data["evolution"]) == 6
-    assert data["evolution"][-2]["total_cents"] == 5000
-    assert data["evolution"][-1]["total_cents"] == 10000
+    if next_date:
+        assert data["evolution"][-2]["total_cents"] == 10000
+        assert data["evolution"][-1]["total_cents"] == 99900
+    else:
+        assert data["evolution"][-2]["total_cents"] == 5000
+        assert data["evolution"][-1]["total_cents"] == 10000
     assert data["expenses"][0]["id"] == selected_id
     assert data["expenses"][0]["date_label"] == date_label
     if today.year == 1:
         assert [option["value"] for option in data["period_options"]] == [
-            "0001-06", "0001-05", "0001-04", "0001-03", "0001-02", "0001-01",
+            "0001-07", "0001-06", "0001-05", "0001-04", "0001-03", "0001-02", "0001-01",
         ]
