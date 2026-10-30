@@ -62,7 +62,10 @@ R$ {{ "{:,.2f}".format(cents / 100).replace(',', '_').replace('.', ',').replace(
 <div class="dashboard-layout">
     <section class="card evolution-card" id="evolucao-mensal" aria-labelledby="evolution-title">
         <div class="card-heading">
-            <h2 id="evolution-title">Evolução mensal</h2>
+            <div class="evolution-title-group">
+                <h2 id="evolution-title">Evolução mensal</h2>
+                <div class="muted chart-caption">Despesas dos últimos 6 meses</div>
+            </div>
             <div class="evolution-filters">
                 <form action="/#evolucao-mensal" method="get" class="category-form" data-auto-submit>
                     <input type="hidden" name="period" value="{{ dashboard_data.period }}">
@@ -88,7 +91,6 @@ R$ {{ "{:,.2f}".format(cents / 100).replace(',', '_').replace('.', ',').replace(
                 </form>
             </div>
         </div>
-        <div class="muted chart-caption">Despesas dos últimos 6 meses</div>
         <div class="bars" aria-label="Despesas por mês">
             {% for month in dashboard_data.evolution %}
             <div class="bar-column">
