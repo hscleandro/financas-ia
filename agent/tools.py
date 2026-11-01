@@ -2,6 +2,7 @@
 
 Cada tool é um wrapper sobre o service correspondente.
 """
+from datetime import date
 from typing import Optional
 
 from langchain_core.tools import tool
@@ -33,19 +34,24 @@ def build_tools(
         expense_date: Optional[str] = None,
         force: bool = False,
     ) -> dict:
-        """Registra um gasto no banco de dados financeiro pessoal.
+        """Registra um NOVO gasto no banco de dados financeiro pessoal.
 
-        Se for detectado um gasto idêntico, a tool retorna um aviso pedindo confirmação.
-        O sistema de confirmação HITL gerencia o parâmetro force automaticamente: só passe
-        force=True quando o usuário confirmar explicitamente que deseja cadastrar a duplicata.
+        NUNCA use esta tool para corrigir um gasto já registrado (categoria, valor,
+        método, data ou descrição) — para isso use find_expense_candidates + update_expense.
+
+        Valores acima de R$ 1.000 passam automaticamente por confirmação do usuário
+        (botões) antes de gravar — NÃO pergunte "Confirmar?" antes nem depois.
+        Se for detectado um gasto idêntico, nada é gravado e a tool retorna o registro
+        existente. Só passe force=True se o usuário pedir explicitamente um SEGUNDO
+        gasto separado; o sistema mostrará o registro existente e pedirá confirmação.
 
         Args:
             amount: Valor do gasto em reais (ex: 55.90)
             description: Descrição do gasto (ex: "almoço no restaurante")
             category: Categoria do gasto (deve ser uma das categorias válidas)
             method: Método de pagamento — use list_payment_methods para ver os disponíveis
-            expense_date: Data do gasto no formato YYYY-MM-DD (padrão: hoje)
-            force: gerenciado pelo sistema — não altere manualmente
+            expense_date: Data YYYY-MM-DD. OMITA se o usuário não mencionou data (o sistema usa hoje).
+            force: True somente para cadastrar um segundo gasto idêntico (exige confirmação)
         """
         return expense_service.record_expense(amount, description, category, method, expense_date, force)
 
@@ -56,17 +62,75 @@ def build_tools(
         category: Optional[str] = None,
         method: Optional[str] = None,
         keyword: Optional[str] = None,
+        amount: Optional[float] = None,
+        limit: Optional[int] = None,
+        include_future: bool = False,
     ) -> list[dict]:
-        """Consulta gastos ativos com filtros opcionais.
+        """Consulta gastos ativos NO BANCO DE DADOS com filtros opcionais (por período,
+        categoria, método, descrição ou valor). Ordem: mais recente → mais antigo.
+
+        Para "últimos N gastos" prefira list_recent_expenses.
+        Sem end_date, considera apenas gastos até hoje; para incluir gastos com data
+        futura (ex.: parcelas a vencer) informe end_date ou include_future=True.
 
         Args:
             start_date: Data inicial no formato YYYY-MM-DD
             end_date: Data final no formato YYYY-MM-DD
             category: Filtrar por categoria específica
-            method: Filtrar por método de pagamento
-            keyword: Palavra-chave para busca textual na descrição
+            method: Filtrar por método de pagamento (ex: "crédito")
+            keyword: Palavra-chave da DESCRIÇÃO (nunca passe valores aqui)
+            amount: Valor exato em reais (ex: 158.77 para "R$ 158,77")
+            limit: Quantidade máxima de registros
+            include_future: True apenas se o usuário pedir gastos futuros
         """
-        return expense_service.query_expenses(start_date, end_date, category, method, keyword)
+        today_iso = date.today().isoformat()
+        if end_date is None and not include_future and (start_date is None or start_date <= today_iso):
+            end_date = today_iso
+        return expense_service.query_expenses(
+            start_date, end_date, category, method, keyword,
+            amount=amount, limit=limit, annotate_installments=True,
+        )
+
+    @tool
+    def list_recent_expenses(
+        limit: int = 10,
+        category: Optional[str] = None,
+        method: Optional[str] = None,
+        keyword: Optional[str] = None,
+        amount: Optional[float] = None,
+        include_installments: bool = False,
+        include_future: bool = False,
+    ) -> dict:
+        """Lista os ÚLTIMOS gastos direto do banco de dados (ex: "liste os 10 últimos
+        gastos", "últimos gastos no cartão de crédito", "últimos gastos de Alimentação").
+
+        Já retorna ordenado da mais recente para a mais antiga e limitado — apresente
+        os itens NA ORDEM recebida, sem remover nem acrescentar nenhum.
+
+        Por padrão:
+        - Só considera gastos realizados até hoje (sem datas futuras).
+        - Compras parceladas aparecem UMA vez, na data original da compra
+          (tipo="compra_parcelada", com valor da parcela e "Nx").
+
+        Args:
+            limit: Quantidade de gastos (padrão 10)
+            category: Filtrar por categoria
+            method: Filtrar por método de pagamento (ex: "crédito" para cartão de crédito)
+            keyword: Palavra-chave da descrição
+            amount: Valor exato em reais
+            include_installments: True SOMENTE se o usuário pedir explicitamente para
+                incluir as parcelas (ex: "incluindo parcelas do cartão")
+            include_future: True SOMENTE se o usuário pedir explicitamente gastos futuros
+        """
+        return expense_service.list_recent_expenses(
+            limit=limit,
+            category=category,
+            method=method,
+            keyword=keyword,
+            amount=amount,
+            include_installments=include_installments,
+            include_future=include_future,
+        )
 
     @tool
     def get_summary(
@@ -122,21 +186,24 @@ def build_tools(
 
     @tool
     def find_expense_candidates(
-        keyword: str,
+        keyword: Optional[str] = None,
         expense_date: Optional[str] = None,
+        amount: Optional[float] = None,
     ) -> dict:
-        """Busca registros candidatos para edição ou exclusão.
+        """Busca no banco os registros candidatos para edição ou exclusão.
 
-        Use esta tool ANTES de delete_expense ou update_expense.
+        Use esta tool ANTES de delete_expense ou update_expense — inclusive quando o
+        usuário pede para corrigir um gasto que acabou de registrar.
 
-        - Com expense_date: retorna registros daquela data que contêm o keyword.
-        - Sem expense_date: retorna registros da DATA MAIS RECENTE que contém o keyword.
+        - Com expense_date: retorna registros daquela data que atendem aos filtros.
+        - Sem expense_date: retorna registros da DATA MAIS RECENTE (até hoje) que atendem.
 
         Args:
             keyword: Palavra-chave da descrição (ex: "almoço", "uber", "farmácia")
             expense_date: Data em YYYY-MM-DD. Só informe se o usuário mencionou data específica.
+            amount: Valor exato em reais (ex: 4849.0) — use quando o usuário citar o valor.
         """
-        return expense_service.find_expense_candidates(keyword, expense_date)
+        return expense_service.find_expense_candidates(keyword, expense_date, amount)
 
     @tool
     def delete_expense(expense_id: int, confirmed: bool) -> dict:
@@ -182,6 +249,7 @@ def build_tools(
     tools = [
         record_expense,
         query_expenses,
+        list_recent_expenses,
         get_summary,
         list_categories,
         list_payment_methods,

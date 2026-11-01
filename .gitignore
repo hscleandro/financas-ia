@@ -10,6 +10,14 @@ venv/
 dist/
 build/
 
+# Segredos e dados locais (não versionar)
+.env.*
+!.env.example
+!.env.docker.example
+*.backup.*
+*.raw
+backup/
+
 # Artefatos de runtime
 .coverage
 *.db-shm

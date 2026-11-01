@@ -15,6 +15,9 @@ from services._base import (
     validate_method_name,
 )
 
+# Tolerância para comparação de valores em reais (meio centavo).
+_AMOUNT_TOLERANCE = 0.005
+
 
 class ExpenseService:
     """Service de gestão de gastos com escopo de user_id."""
@@ -93,7 +96,12 @@ class ExpenseService:
             duplicate = self._find_duplicate(expense_hash)
             if duplicate:
                 return {
-                    "warning": "Já existe um gasto idêntico. Deseja cadastrar mesmo assim?",
+                    "warning": (
+                        f"Já existe um gasto idêntico (ID #{duplicate['id']}). Nada foi gravado. "
+                        "Se o usuário quer CORRIGIR esse gasto (categoria, valor, método etc.), "
+                        f"use update_expense com expense_id={duplicate['id']}. "
+                        "Só use force=True se o usuário quiser um SEGUNDO gasto separado."
+                    ),
                     "tipo": "duplicata",
                     "record": duplicate,
                 }
@@ -148,8 +156,18 @@ class ExpenseService:
         category: Optional[str] = None,
         method: Optional[str] = None,
         keyword: Optional[str] = None,
+        amount: Optional[float] = None,
+        limit: Optional[int] = None,
+        annotate_installments: bool = False,
     ) -> list[dict]:
-        """Consulta gastos ativos com filtros opcionais."""
+        """Consulta gastos ativos com filtros opcionais.
+
+        Args:
+            amount: filtra pelo valor exato (tolerância de meio centavo).
+            limit: número máximo de registros retornados (após todos os filtros).
+            annotate_installments: adiciona dados de parcela (x/N e data original
+                da compra) aos registros que são parcelas de cartão.
+        """
         query = (
             "SELECT id, amount, description, category, method, expense_date, created_at "
             "FROM expenses WHERE deleted_at IS NULL"
@@ -172,8 +190,11 @@ class ExpenseService:
         if method:
             query += " AND method = ?"
             params.append(method)
+        if amount is not None:
+            query += " AND ABS(amount - ?) < ?"
+            params.extend([float(amount), _AMOUNT_TOLERANCE])
 
-        query += " ORDER BY expense_date DESC, created_at DESC"
+        query += " ORDER BY expense_date DESC, created_at DESC, id DESC"
 
         rows = self.conn.execute(query, params).fetchall()
         results = [dict(row) for row in rows]
@@ -185,7 +206,171 @@ class ExpenseService:
                 if normalized_kw in normalize_description(r["description"])
             ]
 
+        if limit is not None and limit > 0:
+            results = results[:limit]
+
+        if annotate_installments and results:
+            parcels = self._installment_info([r["id"] for r in results])
+            for r in results:
+                info = parcels.get(r["id"])
+                if info:
+                    r["parcela"] = f"{info['parcel_number']}/{info['total_parcels']}"
+                    r["data_compra_original"] = info["original_purchase_date"]
+
         return results
+
+    # ── Parcelas ─────────────────────────────────────────────────────────────
+
+    def _installment_info(self, expense_ids: list[int]) -> dict[int, dict]:
+        """Mapeia expense_id → dados da parcela (somente despesas que são parcelas)."""
+        if not expense_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in expense_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT ip.expense_id, ip.parcel_number, ig.id AS group_id, ig.total_parcels,
+                   ig.original_purchase_date
+            FROM installment_parcels ip
+            JOIN installment_groups ig ON ig.id = ip.group_id
+            WHERE ip.expense_id IN ({placeholders})
+            ORDER BY ip.id
+            """,
+            list(expense_ids),
+        ).fetchall()
+        info: dict[int, dict] = {}
+        for row in rows:
+            info.setdefault(row["expense_id"], dict(row))
+        return info
+
+    def list_recent_expenses(
+        self,
+        limit: int = 10,
+        category: Optional[str] = None,
+        method: Optional[str] = None,
+        keyword: Optional[str] = None,
+        amount: Optional[float] = None,
+        include_installments: bool = False,
+        include_future: bool = False,
+        today: Optional[date] = None,
+    ) -> dict:
+        """Lista os últimos gastos realizados, do mais recente para o mais antigo.
+
+        Regras:
+        - Por padrão, só considera gastos com data <= hoje (gastos futuros só com
+          include_future=True).
+        - Por padrão, compras parceladas no cartão aparecem UMA vez, na data
+          original da compra, com o valor da parcela e a quantidade de parcelas.
+          Os lançamentos mensais das parcelas não são tratados como novas compras.
+        - Com include_installments=True, cada parcela aparece individualmente na
+          data do seu lançamento, identificada como "x/N".
+        """
+        limit = max(1, min(int(limit or 10), 100))
+        today_iso = (today or date.today()).isoformat()
+
+        query = """
+            SELECT e.id, e.amount, e.description, e.category, e.method, e.expense_date,
+                   e.created_at, ip.parcel_number, ig.id AS group_id, ig.total_parcels,
+                   ig.original_purchase_date
+            FROM expenses e
+            LEFT JOIN installment_parcels ip
+                   ON ip.id = (SELECT MIN(p.id) FROM installment_parcels p WHERE p.expense_id = e.id)
+            LEFT JOIN installment_groups ig ON ig.id = ip.group_id
+            WHERE e.deleted_at IS NULL
+        """
+        params: list = []
+        if self.user_id is not None:
+            query += " AND e.user_id = ?"
+            params.append(self.user_id)
+        if category:
+            query += " AND e.category = ?"
+            params.append(category)
+        if method:
+            query += " AND e.method = ?"
+            params.append(method)
+        if amount is not None:
+            query += " AND ABS(e.amount - ?) < ?"
+            params.extend([float(amount), _AMOUNT_TOLERANCE])
+        if not include_future and include_installments:
+            query += " AND e.expense_date <= ?"
+            params.append(today_iso)
+        elif not include_future:
+            # Parcelas são filtradas depois pela data original da compra.
+            query += " AND (ig.id IS NOT NULL OR e.expense_date <= ?)"
+            params.append(today_iso)
+
+        rows = [dict(r) for r in self.conn.execute(query, params).fetchall()]
+
+        if keyword:
+            normalized_kw = normalize_description(keyword)
+            rows = [r for r in rows if normalized_kw in normalize_description(r["description"])]
+
+        items: list[dict] = []
+        groups: dict[int, list[dict]] = {}
+        for r in rows:
+            if r["group_id"] is None:
+                items.append(self._plain_item(r))
+            elif include_installments:
+                item = self._plain_item(r)
+                item["tipo"] = "parcela"
+                item["parcela"] = f"{r['parcel_number']}/{r['total_parcels']}"
+                item["data_compra_original"] = r["original_purchase_date"]
+                items.append(item)
+            else:
+                groups.setdefault(r["group_id"], []).append(r)
+
+        for parcels in groups.values():
+            parcels.sort(key=lambda p: p["parcel_number"])
+            first = parcels[0]
+            purchase_date = first["original_purchase_date"] or first["expense_date"]
+            if not include_future and purchase_date > today_iso:
+                continue
+            # Parcela vigente: a última já lançada até hoje (ou a primeira registrada).
+            current = next(
+                (p for p in reversed(parcels) if p["expense_date"] <= today_iso), first
+            )
+            parcel_amount = round(float(current["amount"]), 2)
+            total = first["total_parcels"]
+            items.append({
+                "id": current["id"],
+                "amount": parcel_amount,
+                "description": current["description"],
+                "category": current["category"],
+                "method": current["method"],
+                "expense_date": purchase_date,
+                "created_at": first["created_at"],
+                "tipo": "compra_parcelada",
+                "parcelas": f"{total}x",
+                "valor_parcela": parcel_amount,
+                "valor_total": round(parcel_amount * total, 2),
+                "parcela_atual": f"{current['parcel_number']}/{total}",
+            })
+
+        items.sort(
+            key=lambda i: (i["expense_date"], i["created_at"] or "", i["id"]),
+            reverse=True,
+        )
+        items = items[:limit]
+
+        return {
+            "hoje": today_iso,
+            "ordem": "da mais recente para a mais antiga",
+            "inclui_futuros": include_future,
+            "parcelas_individuais": include_installments,
+            "total_retornado": len(items),
+            "gastos": items,
+        }
+
+    @staticmethod
+    def _plain_item(row: dict) -> dict:
+        return {
+            "id": row["id"],
+            "amount": row["amount"],
+            "description": row["description"],
+            "category": row["category"],
+            "method": row["method"],
+            "expense_date": row["expense_date"],
+            "created_at": row["created_at"],
+        }
 
     def get_summary(
         self,
@@ -294,25 +479,34 @@ class ExpenseService:
 
     def find_expense_candidates(
         self,
-        keyword: str,
+        keyword: Optional[str] = None,
         expense_date: Optional[str] = None,
+        amount: Optional[float] = None,
     ) -> dict:
-        """Busca registros candidatos para edição ou exclusão."""
-        normalized_kw = normalize_description(keyword)
+        """Busca registros candidatos para edição ou exclusão.
 
+        Aceita keyword (descrição), amount (valor exato) ou ambos.
+        """
+        if not keyword and amount is None:
+            return {
+                "error": "Informe keyword (descrição) e/ou amount (valor) para buscar o registro.",
+                "tipo": "invalido",
+            }
+        normalized_kw = normalize_description(keyword) if keyword else ""
+
+        query = (
+            "SELECT id, amount, description, category, method, expense_date "
+            "FROM expenses WHERE deleted_at IS NULL"
+        )
+        params: list = []
         if self.user_id is not None:
-            all_rows = self.conn.execute(
-                "SELECT id, amount, description, category, method, expense_date "
-                "FROM expenses WHERE deleted_at IS NULL AND user_id = ? "
-                "ORDER BY expense_date DESC, id DESC",
-                (self.user_id,),
-            ).fetchall()
-        else:
-            all_rows = self.conn.execute(
-                "SELECT id, amount, description, category, method, expense_date "
-                "FROM expenses WHERE deleted_at IS NULL "
-                "ORDER BY expense_date DESC, id DESC"
-            ).fetchall()
+            query += " AND user_id = ?"
+            params.append(self.user_id)
+        if amount is not None:
+            query += " AND ABS(amount - ?) < ?"
+            params.extend([float(amount), _AMOUNT_TOLERANCE])
+        query += " ORDER BY expense_date DESC, id DESC"
+        all_rows = self.conn.execute(query, params).fetchall()
 
         matching = [
             row for row in all_rows
@@ -320,10 +514,21 @@ class ExpenseService:
         ]
 
         if not matching:
-            return {"keyword": keyword, "date_searched": expense_date, "total_found": 0, "records": []}
+            return {
+                "keyword": keyword,
+                "amount": amount,
+                "date_searched": expense_date,
+                "total_found": 0,
+                "records": [],
+            }
 
         if expense_date is None:
-            date_searched = max(row["expense_date"] for row in matching)
+            # Data mais recente até hoje; datas futuras (ex.: parcelas) só se não houver outra.
+            today_iso = date.today().isoformat()
+            past_dates = [row["expense_date"] for row in matching if row["expense_date"] <= today_iso]
+            date_searched = max(past_dates) if past_dates else min(
+                row["expense_date"] for row in matching
+            )
         else:
             date_searched = expense_date
 
@@ -331,6 +536,7 @@ class ExpenseService:
 
         return {
             "keyword": keyword,
+            "amount": amount,
             "date_searched": date_searched,
             "total_found": len(records),
             "records": records,

@@ -28,6 +28,7 @@ def test_tools_integration(tools):
     expected_tools = [
         "record_expense",
         "query_expenses",
+        "list_recent_expenses",
         "get_summary",
         "list_categories",
         "list_payment_methods",

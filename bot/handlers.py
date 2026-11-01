@@ -63,7 +63,12 @@ async def process_telegram_message(
         tools = build_tools(expense_service, income_service)
 
         # 3. LangGraph
-        graph = build_graph(tools, checkpointer=checkpointer)
+        graph = build_graph(
+            tools,
+            checkpointer=checkpointer,
+            user_id=user_id,
+            categories=expense_service.list_categories(),
+        )
 
         thread_id = f"user_{user_id}"
         config = {"configurable": {"thread_id": thread_id}}
