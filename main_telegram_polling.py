@@ -15,6 +15,7 @@ import logging
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from telegram import Update
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
 
 from config import settings
@@ -27,6 +28,27 @@ logging.basicConfig(
 # httpx registra a URL completa (com o token do bot) em nível INFO — silenciar.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+async def _init_app_with_retry(app: Application, max_retries: int = 5, base_delay: float = 5.0) -> None:
+    """Inicializa a aplicação com retentativas em caso de timeout de rede.
+
+    get_me() na inicialização pode falhar por instabilidade com a API do
+    Telegram (ex.: TimedOut). Sem retry o processo morre e o servidor para.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            await app.initialize()
+            return
+        except (TimedOut, NetworkError) as e:
+            if attempt == max_retries:
+                raise
+            wait = base_delay * attempt
+            logger.warning(
+                f"Timeout/erro de rede na inicialização do Telegram (tentativa {attempt}/{max_retries}): {e}. "
+                f"Tentando novamente em {wait}s..."
+            )
+            await asyncio.sleep(wait)
 
 
 async def handle_message(update: Update, context) -> None:
@@ -88,8 +110,17 @@ async def main() -> None:
     async with AsyncSqliteSaver.from_conn_string(settings.checkpoints_path) as checkpointer:
         logger.info("✅ Checkpointer criado!")
 
-        # Criar aplicação do Telegram
-        app = Application.builder().token(settings.telegram_bot_token).build()
+        # Criar aplicação do Telegram com timeouts mais generosos
+        app = (
+            Application.builder()
+            .token(settings.telegram_bot_token)
+            .connect_timeout(30)
+            .read_timeout(30)
+            .write_timeout(30)
+            .get_updates_connect_timeout(60)
+            .get_updates_read_timeout(60)
+            .build()
+        )
 
         # Armazenar checkpointer no bot_data para acesso nos handlers
         app.bot_data["checkpointer"] = checkpointer
@@ -102,7 +133,7 @@ async def main() -> None:
         logger.info("Pressione Ctrl+C para parar.")
 
         # Iniciar polling
-        await app.initialize()
+        await _init_app_with_retry(app)
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
 
