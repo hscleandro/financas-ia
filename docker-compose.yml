@@ -34,7 +34,7 @@ services:
 
     # Healthcheck
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f python || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import os, sys; cmdlines=[open(f'/proc/{p}/cmdline','r').read() for p in os.listdir('/proc') if p.isdigit() and os.path.exists(f'/proc/{p}/cmdline')]; sys.exit(0 if any('main_telegram_polling' in c for c in cmdlines) else 1)\""]
       interval: 30s
       timeout: 10s
       retries: 3
