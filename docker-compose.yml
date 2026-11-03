@@ -62,6 +62,8 @@ services:
     volumes:
       # Persistir banco de dados
       - ./data:/app/data
+      # Permitir atualização de assets estáticos e uploads sem rebuild
+      - ./web/static:/app/web/static
 
     ports:
       # Disponível apenas no host para o nginx
